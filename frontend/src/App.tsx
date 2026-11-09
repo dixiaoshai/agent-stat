@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Filters, Page, Selection } from './types';
-import { FiltersBar, type FilterControls } from './components/FiltersBar';
+import { FiltersBar, type FilterControls, type ProjectOption } from './components/FiltersBar';
 import { SessionDialog } from './components/SessionDialog';
 import { useStats } from './hooks/useStats';
-import { formatDate, timeZone } from './lib/format';
+import { formatDate, projectName, timeZone } from './lib/format';
 import { Overview } from './pages/Overview';
 import { Sessions } from './pages/Sessions';
 import { Source } from './pages/Source';
@@ -20,7 +20,7 @@ export default function App() {
   const [page, setPage] = useState<Page>('overview');
   const [controls, setControls] = useState(initialFilters);
   const [selection, setSelection] = useState<Selection | null>(null);
-  const [facets, setFacets] = useState<{ projects: string[]; models: string[] }>({
+  const [facets, setFacets] = useState<{ projects: ProjectOption[]; models: string[] }>({
     projects: [],
     models: [],
   });
@@ -41,11 +41,13 @@ export default function App() {
     if (!data) return;
     setFacets((previous) => ({
       projects: [
-        ...new Set([
-          ...previous.projects,
-          ...data.sessions.map((s) => s.project).filter((p): p is string => Boolean(p)),
-        ]),
-      ].sort(),
+        ...new Map([
+          ...previous.projects.map((project) => [project.path, project] as const),
+          ...data.sessions
+            .filter((s) => s.project)
+            .map((s) => [s.project!, { path: s.project!, name: projectName(s) }] as const),
+        ]).values(),
+      ].sort((a, b) => a.name.localeCompare(b.name)),
       models: [...new Set([...previous.models, ...data.groups.map((g) => g.model)])].sort(),
     }));
   }, [data]);

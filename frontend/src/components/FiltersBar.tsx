@@ -6,6 +6,11 @@ export interface FilterControls {
   end: string;
 }
 
+export interface ProjectOption {
+  path: string;
+  name: string;
+}
+
 export function FiltersBar({
   value,
   projects,
@@ -13,7 +18,7 @@ export function FiltersBar({
   onChange,
 }: {
   value: FilterControls;
-  projects: string[];
+  projects: ProjectOption[];
   models: string[];
   onChange: (value: FilterControls) => void;
 }) {
@@ -50,7 +55,9 @@ export function FiltersBar({
         <select value={value.project} onChange={(e) => update('project', e.target.value)}>
           <option value="">全部工作区</option>
           {projects.map((project) => (
-            <option key={project}>{project}</option>
+            <option key={project.path} value={project.path} title={project.path}>
+              {project.name}
+            </option>
           ))}
         </select>
       </label>

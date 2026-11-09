@@ -92,11 +92,87 @@ class AcceptanceTests(unittest.TestCase):
         self.assertIsNone(result['summary']['token_total'])
         self.assertIsNone(result['summary']['token_known'])
         self.assertTrue(result['summary']['aggregation_blocked'])
+        self.assertEqual(result['summary']['observed_token_total'], 180)
+        self.assertEqual(result['summary']['observed_token_known'], 180)
+        self.assertEqual(result['groups'][0]['observed_token_known'], 180)
+        self.assertEqual(result['trend'][0]['observed_token_known'], 180)
+        self.assertIsNone(result['groups'][0]['token_known'])
+        self.assertIsNone(result['trend'][0]['token_known'])
         self.assertEqual(sorted(s['token_total'] for s in result['sessions']), [40,140])
         old = fixture('parent', 100)
         old[-1]['timestamp'] = '2026-11-01T10:00:02Z'
         self.store.import_paths([self.write(old, 'old-copy.jsonl')])
         self.assertIn(140, [s['token_total'] for s in self.store.query()['sessions']])
+
+    def test_observed_subtotal_respects_model_and_time_filters(self):
+        parent, child = fixture('parent', 140), fixture('child', 40)
+        child[0]['payload']['parent_id'] = 'parent'
+        child[2]['payload']['model'] = 'child-model'
+        for row in child:
+            row['timestamp'] = row['timestamp'].replace('2026-11-01', '2026-11-02')
+        self.store.import_paths([self.write(parent, 'parent.jsonl'), self.write(child, 'child.jsonl')])
+        for filters in ({'model': 'child-model'}, {'start': '2026-11-02T00:00:00Z'}):
+            scoped = self.store.query(filters)
+            self.assertEqual(scoped['summary']['sessions'], 1)
+            self.assertEqual(scoped['summary']['observed_token_known'], 40)
+            self.assertEqual(scoped['summary']['token_known'], 40)
+            self.assertFalse(scoped['summary']['aggregation_blocked'])
+
+    def test_observed_subtotal_preserves_missing_and_zero(self):
+        missing = fixture('missing')
+        missing.pop(3)
+        path = self.write(missing)
+        self.store.import_paths([path])
+        result = self.store.query()
+        self.assertIsNone(result['summary']['observed_token_known'])
+        self.assertIsNone(result['trend'][0]['observed_token_known'])
+        zero = fixture('zero')
+        zero[3]['payload']['info']['total_token_usage'] = {'total_tokens': 0}
+        self.store.import_paths([self.write(zero, 'zero.jsonl')])
+        result = self.store.query()
+        self.assertIsNone(result['summary']['observed_token_total'])
+        self.assertEqual(result['summary']['observed_token_known'], 0)
+        self.assertEqual(result['summary']['token_samples'], 1)
+
+    def test_warning_has_one_source_qualified_occurrence(self):
+        events = fixture()
+        events.append(event('event_msg', {'type': 'token_count', 'info': {}}, 4))
+        path = self.write(events)
+        self.store.import_paths([path])
+        warnings = self.store.query()['warnings']
+        self.assertEqual(warnings, [path + ': 用量事件缺少有效累计快照: 行 6'])
+
+    def test_rate_limit_only_event_does_not_claim_missing_usage(self):
+        events = fixture()
+        events.insert(1, event('event_msg', {'type': 'token_count', 'info': None,
+                                           'rate_limits': {'primary': {'used_percent': 5}}}))
+        report = self.store.import_paths([self.write(events)])
+        self.assertEqual(report['warnings'], [])
+        result = self.store.query()
+        self.assertEqual(result['summary']['turns'], 1)
+        self.assertEqual(result['summary']['token_total'], 120)
+
+    def test_malformed_usage_is_not_hidden_by_rate_limits(self):
+        for index, info in enumerate((None, {}, {'total_token_usage': {'total_tokens': -1}})):
+            events = fixture('invalid-%d' % index)
+            payload = {'type': 'token_count', 'info': info}
+            if info is not None:
+                payload['rate_limits'] = {'primary': {'used_percent': 5}}
+            events.append(event('event_msg', payload, 4))
+            report = self.store.import_paths([self.write(events, '%d.jsonl' % index)])
+            self.assertEqual(len(report['warnings']), 1)
+
+    def test_reimport_replaces_stale_parser_warning_without_usage_changes(self):
+        path = self.write(fixture())
+        self.store.import_paths([path])
+        key, body = self.store.db.execute('SELECT key,body FROM sessions').fetchone()
+        data = json.loads(body)
+        data['warnings'] = ['obsolete parser warning']
+        self.store.db.execute('UPDATE sessions SET body=? WHERE key=?', (json.dumps(data), key))
+        self.store.db.commit()
+        report = self.store.import_paths([path])
+        self.assertEqual(report['imported'], 1)
+        self.assertEqual(self.store.query()['warnings'], [])
 
     def test_corrupt_record_and_offset_time(self):
         path = self.write(fixture())

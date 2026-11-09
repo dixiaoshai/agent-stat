@@ -1,7 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import { getSession } from '../lib/api';
 import type { Filters, Selection, SessionDetail, Turn } from '../types';
-import { attributionLabel, formatDate, formatNumber, statusLabel } from '../lib/format';
+import {
+  attributionLabel,
+  cacheRate,
+  formatCost,
+  formatDate,
+  formatNumber,
+  formatPercent,
+  projectName,
+  sessionName,
+  statusLabel,
+  turnName,
+  uncachedInput,
+} from '../lib/format';
 
 export function SessionDialog({
   selection,
@@ -49,6 +61,7 @@ export function SessionDialog({
   }, [selection?.sessionId, filters, selection?.turnId]);
 
   const close = () => onClose();
+  const selectedTurn = detail?.turns.find((turn) => turn.id === selection?.turnId);
   return (
     <dialog
       ref={ref}
@@ -61,9 +74,20 @@ export function SessionDialog({
     >
       <div className="panel-head">
         <div>
-          <span className="eyebrow">SESSION DETAIL</span>
-          <h2 id="detail-title">{detail?.session.project || '会话详情'}</h2>
-          <small className="identity">{detail?.session.id || selection?.sessionId}</small>
+          <span className="eyebrow">{selection?.turnId ? '轮次详情' : '会话详情'}</span>
+          <h2 id="detail-title">
+            {selectedTurn
+              ? turnName(selectedTurn)
+              : detail
+                ? sessionName(detail.session)
+                : '正在读取详情…'}
+          </h2>
+          {detail && (
+            <small className="identity">
+              {selectedTurn && <>所属会话：{sessionName(detail.session)} · </>}
+              会话 ID：{detail.session.native_id || detail.session.id}
+            </small>
+          )}
         </div>
         <button className="text-button" onClick={close} autoFocus>
           关闭 ×
@@ -78,6 +102,10 @@ export function SessionDialog({
       {detail && (
         <>
           <p className="metadata">
+            工作区：
+            <span title={detail.session.project || undefined}>{projectName(detail.session)}</span>
+          </p>
+          <p className="metadata">
             来源：{detail.session.source_path || '未知'} · 时区：
             {Intl.DateTimeFormat().resolvedOptions().timeZone}
           </p>
@@ -91,6 +119,30 @@ export function SessionDialog({
               {warning}
             </p>
           ))}
+          {!selection?.turnId && (
+            <section className="session-cache" aria-label="会话缓存统计">
+              <h3>会话缓存输入 · 当前筛选范围</h3>
+              <p>
+                缓存输入 {formatNumber(detail.session.cache_usage.cached_input_known)} · 未缓存输入{' '}
+                {formatNumber(detail.session.cache_usage.uncached_input_known)} · 占输入{' '}
+                {formatPercent(detail.session.cache_usage.hit_rate)}
+              </p>
+              <p className="muted">
+                配对覆盖 {detail.session.cache_usage.samples}/{detail.session.cache_usage.turns} 轮
+                {!detail.session.cache_usage.complete && detail.session.cache_usage.samples > 0
+                  ? ' · 已知小计'
+                  : ''}
+                {detail.session.cache_usage.cache_write_known != null && (
+                  <>
+                    {' '}
+                    · 缓存写入 {formatNumber(detail.session.cache_usage.cache_write_known)}（
+                    {detail.session.cache_usage.cache_write_samples}/
+                    {detail.session.cache_usage.turns} 轮有写入数据）
+                  </>
+                )}
+              </p>
+            </section>
+          )}
           {selectedTurns(detail.turns, selection?.turnId).length === 0 && (
             <p className="empty">当前筛选范围没有匹配的轮次。</p>
           )}
@@ -111,25 +163,43 @@ function TurnDetail({ turn }: { turn: Turn }) {
   const facts: [string, string][] = [
     ['时间', `${formatDate(turn.started_at)} → ${formatDate(turn.ended_at)}`],
     ['模型', turn.model || '未知'],
-    ['轮次身份', turn.native_id || '未知'],
+    ['轮次 ID', turn.native_id || '未知'],
     ['归属', attributionLabel(turn.attribution)],
     ['Token', formatNumber(turn.token_total)],
     [
       '输入 / 缓存输入',
       `${formatNumber(turn.input_tokens)} / ${formatNumber(turn.cached_input_tokens)}`,
     ],
+    ['未缓存输入', formatNumber(uncachedInput(turn.input_tokens, turn.cached_input_tokens))],
+    ['缓存占输入', formatPercent(cacheRate(turn.input_tokens, turn.cached_input_tokens))],
+    ...(turn.cache_write_input_tokens != null
+      ? [['缓存写入', formatNumber(turn.cache_write_input_tokens)] as [string, string]]
+      : []),
     [
       '输出 / 推理输出',
       `${formatNumber(turn.output_tokens)} / ${formatNumber(turn.reasoning_output_tokens)}`,
     ],
-    ['费用', '未知'],
+    [
+      '估算费用',
+      turn.estimated_cost == null
+        ? `未知${turn.estimated_cost_reason ? ` · ${turn.estimated_cost_reason}` : ''}`
+        : `${formatCost(turn.estimated_cost)} USD · 非实际账单`,
+    ],
+    ...(turn.cost_breakdown
+      ? [
+          [
+            '费用构成',
+            `普通输入 ${formatCost(turn.cost_breakdown.input)} · 缓存输入 ${formatCost(turn.cost_breakdown.cached_input)} · 输出 ${formatCost(turn.cost_breakdown.output)}`,
+          ] as [string, string],
+        ]
+      : []),
     ['模型调用', '未知'],
     ['状态', statusLabel(turn.status)],
   ];
   return (
     <article className="turn">
       <div className="turn-heading">
-        <b>轮次 · {turn.native_id}</b>
+        <b>{turnName(turn)}</b>
         <span className="tag">{statusLabel(turn.status)}</span>
       </div>
       <dl className="detail-grid">
@@ -179,7 +249,9 @@ function TurnDetail({ turn }: { turn: Turn }) {
         ))}
       </details>
       <p className="detail-note">
-        费用与模型请求数未核实。字节数不换算为 Token；分类字段不重复相加。
+        估算基于当前 API
+        标准短上下文单价；未记录缓存写入时按无单独计费写入估算，未还原请求级长上下文加价或工具附加费。
+        实际账单与模型请求数未知；字节数不换算为 Token，分类字段不重复相加。
       </p>
     </article>
   );
