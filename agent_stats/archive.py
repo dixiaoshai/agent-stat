@@ -1,6 +1,7 @@
 """Consume versioned, metadata-only archive exports without opening source logs."""
 import hashlib
 import json
+import math
 from datetime import datetime, timezone
 
 from .codex import FIELDS, summarize_events, timestamp, usage_total
@@ -12,13 +13,15 @@ _FIELDS = {
     'message.user': {'title'}, 'message.assistant': set(), 'reasoning.summary': {'available'},
     'tool.called': {'call_id', 'name', 'input_bytes'},
     'tool.returned': {'call_id', 'output_bytes', 'status'},
-    'usage.snapshot': {'cumulative', 'last_usage', 'rate_limit_only'},
+    'usage.snapshot': {'cumulative', 'last_usage', 'rate_limit_only', 'cost_usd', 'cost_source'},
     'context.compacted': set(), 'source.unknown': set(), 'session.deleted': set(),
 }
 _ENVELOPE = {'schema_version', 'event_id', 'archive_seq', 'runtime', 'instance_id', 'session_id',
              'session_key', 'project_id', 'kind', 'occurred_at', 'observed_at', 'native_type',
              'source', 'data', 'body', 'raw'}
 _HEX = set('0123456789abcdef')
+_RUNTIMES = {'codex', 'pi'}
+_COST_SOURCES = {'provider', 'model_rates'}
 
 
 def _canonical(value):
@@ -89,6 +92,12 @@ def _validate_event(event, after, end):
         elif name in ('input_bytes', 'output_bytes'):
             if value is not None and not _integer(value):
                 raise ValueError('invalid byte count')
+        elif name == 'cost_usd':
+            if (value is not None and (type(value) not in (int, float) or not math.isfinite(value) or value < 0)):
+                raise ValueError('invalid cost')
+        elif name == 'cost_source':
+            if value is not None and value not in _COST_SOURCES:
+                raise ValueError('invalid cost source')
         elif name in ('available', 'rate_limit_only'):
             if value is not None and type(value) is not bool:
                 raise ValueError('invalid boolean')
@@ -122,7 +131,8 @@ def _observation(event):
         clean.update({name: data.get(name) for name in ('call_id', 'name', 'input_bytes', 'output_bytes')})
     if kind == 'usage.snapshot':
         clean.update(cumulative=usage_total(data.get('cumulative')), last_usage=usage_total(data.get('last_usage')),
-                     rate_limit_only=data.get('rate_limit_only', False))
+                     rate_limit_only=data.get('rate_limit_only', False),
+                     cost_usd=data.get('cost_usd'), cost_source=data.get('cost_source'))
     return (timestamp(event['occurred_at']), event['source']['line'], native, clean)
 
 
@@ -148,7 +158,7 @@ def _rollout_result(events):
             'parent_id': data.get('parent_session_id'), 'forked_from_id': data.get('forked_from_session_id'),
             'cli_version': data.get('cli_version'), 'recorded_at': timestamp(start['occurred_at'])}
     observations = [_observation(e) for e in events if e['kind'] != 'session.deleted']
-    result, _ = summarize_events(observations, meta, instance=start['instance_id'])
+    result, _ = summarize_events(observations, meta, instance=start['instance_id'], runtime=start['runtime'])
     if not result:
         return None
     revision_at = max((e['occurred_at'] for e in events if e['occurred_at']), default='')
@@ -173,7 +183,7 @@ def _rebuild(db, archive_id, session_key):
     result['native_id'], result['id'] = result['id'], session_key
     for field in ('parent_id', 'forked_from_id'):
         if result.get(field):
-            result[field] = json.dumps(['codex', start['instance_id'], result[field]], ensure_ascii=False, separators=(',', ':'))
+            result[field] = json.dumps([start['runtime'], start['instance_id'], result[field]], ensure_ascii=False, separators=(',', ':'))
     for turn in result['turns']:
         turn['native_id'], turn['id'] = turn['id'], json.dumps([session_key, turn['id']], ensure_ascii=False, separators=(',', ':'))
     result['project_name'] = start['project_id']
@@ -196,7 +206,7 @@ def import_batch(store, batch):
     previous = after
     for event in batch['events']:
         _validate_event(event, after, end)
-        if event['runtime'] != 'codex':
+        if event['runtime'] not in _RUNTIMES:
             raise ValueError('unsupported runtime')
         if event['archive_seq'] <= previous:
             raise ValueError('events must be ordered')

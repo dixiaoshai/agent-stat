@@ -1,4 +1,5 @@
 """Current standard short-context API equivalents, never actual account charges."""
+import math
 from decimal import Decimal
 
 
@@ -32,11 +33,24 @@ def _amount(value):
 
 def estimate_turn(turn):
     """Enrich a copy at query time, so price changes do not require reimports."""
-    result = dict(turn, estimated_cost=None, estimated_cost_reason=None, cost_breakdown=None)
+    result = dict(turn, estimated_cost=None, estimated_cost_reason=None, cost_breakdown=None,
+                  cost_basis=None, cost_source=None)
 
     def unavailable(reason):
         result['estimated_cost_reason'] = reason
         return result
+
+    # A harness-recorded request cost (e.g. pi) is authoritative for that turn:
+    # it already reflects the rate table and provider-reported charges in effect
+    # when the request was made. Never re-estimate it from today's PRICING.
+    recorded = turn.get('recorded_cost_usd')
+    if recorded is not None:
+        if type(recorded) in (int, float) and math.isfinite(recorded) and recorded >= 0:
+            result['estimated_cost'] = _amount(recorded)
+            result['cost_basis'] = 'recorded'
+            result['cost_source'] = turn.get('recorded_cost_source')
+            return result
+        return unavailable('记录成本无效')
 
     rates = PRICING['models'].get(turn.get('model'))
     if rates is None:
@@ -62,15 +76,26 @@ def estimate_turn(turn):
     amounts = {key: Decimal(counts[key]) * Decimal(str(rates[key])) / 1000000 for key in counts}
     result['estimated_cost'] = _amount(sum(amounts.values()))
     result['cost_breakdown'] = {key: _amount(value) for key, value in amounts.items()}
+    result['cost_basis'] = 'estimated'
+    result['cost_source'] = 'model_rates'
     return result
 
 
 def aggregate_cost(turns, blocked=False):
     values = [t['estimated_cost'] for t in turns if t.get('estimated_cost') is not None]
     known = _amount(sum((Decimal(str(v)) for v in values), Decimal(0))) if values else None
+    bases = {t.get('cost_basis') for t in turns if t.get('estimated_cost') is not None}
+    basis = next(iter(bases)) if len(bases) == 1 else ('mixed' if bases else None)
+    recorded = [t['estimated_cost'] for t in turns if t.get('cost_basis') == 'recorded'
+                and t.get('estimated_cost') is not None]
+    recorded_known = _amount(sum((Decimal(str(v)) for v in recorded), Decimal(0))) if recorded else None
     return {
         'estimated_cost': known if values and len(values) == len(turns) and not blocked else None,
         'estimated_cost_known': None if blocked else known,
         'observed_estimated_cost_known': known,
         'cost_samples': len(values),
+        'cost_basis': basis,
+        'recorded_cost': recorded_known if recorded and len(recorded) == len(turns) and not blocked else None,
+        'recorded_cost_known': None if blocked else recorded_known,
+        'recorded_cost_samples': len(recorded),
     }

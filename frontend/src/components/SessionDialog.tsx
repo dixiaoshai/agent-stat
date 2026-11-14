@@ -180,10 +180,12 @@ function TurnDetail({ turn }: { turn: Turn }) {
       `${formatNumber(turn.output_tokens)} / ${formatNumber(turn.reasoning_output_tokens)}`,
     ],
     [
-      '估算费用',
+      turn.cost_basis === 'recorded' ? '记录费用' : '估算费用',
       turn.estimated_cost == null
         ? `未知${turn.estimated_cost_reason ? ` · ${turn.estimated_cost_reason}` : ''}`
-        : `${formatCost(turn.estimated_cost)} USD · 非实际账单`,
+        : turn.cost_basis === 'recorded'
+          ? `${formatCost(turn.estimated_cost)} USD · pi 记录值，非实际账单`
+          : `${formatCost(turn.estimated_cost)} USD · 非实际账单`,
     ],
     ...(turn.cost_breakdown
       ? [
