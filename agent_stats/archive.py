@@ -54,13 +54,22 @@ def _validate_event(event, after, end):
     if event['kind'] == 'session.deleted':
         if source is not None or event['data'] != {}:
             raise ValueError('deletion source must be null and metadata must be empty')
-    elif (not isinstance(source, dict) or set(source) != {'path', 'line', 'record_hash'}
+    elif (not isinstance(source, dict) or set(source) - {'series'} != {'path', 'line', 'record_hash'}
           or not isinstance(source['path'], str) or not _integer(source['line']) or source['line'] < 1
           or not _id(source['record_hash'])):
         raise ValueError('invalid source reference')
+    # Rollouts folded into a shared session carry their own first identity so
+    # two files do not collide on (session, line). The field is optional and is
+    # part of the identifier only when present.
+    series = source.get('series') if isinstance(source, dict) and event['kind'] != 'session.deleted' else None
+    if series is not None and (not isinstance(series, str) or not series or len(series) > 1000
+                               or series == event['session_id']):
+        raise ValueError('invalid source series')
     if event['runtime'] == 'codex':
-        native_identity = [event['runtime'], event['instance_id'], event['session_id'],
-                           'deleted' if event['kind'] == 'session.deleted' else source['line']]
+        native_identity = [event['runtime'], event['instance_id'], event['session_id']]
+        if series is not None:
+            native_identity.append(series)
+        native_identity.append('deleted' if event['kind'] == 'session.deleted' else source['line'])
         native_json = json.dumps(native_identity, ensure_ascii=False, separators=(',', ':'))
         if hashlib.sha256(native_json.encode('utf-8')).hexdigest() != event['event_id']:
             raise ValueError('invalid Codex event ID')
@@ -117,13 +126,23 @@ def _observation(event):
     return (timestamp(event['occurred_at']), event['source']['line'], native, clean)
 
 
-def _rebuild(db, archive_id, session_key):
-    rows = db.execute('SELECT body FROM archive_events WHERE archive_id=? AND session_key=? ORDER BY seq',
-                      (archive_id, session_key)).fetchall()
-    events = [json.loads(row[0]) for row in rows]
+def _source_group(event):
+    """One source rollout: its folded-file series when present, else its path."""
+    source = event.get('source') or {}
+    return source.get('series') or source.get('path') or ''
+
+
+def _rollout_result(events):
+    """Summarize one rollout file the way the direct reader does.
+
+    Several rollouts can belong to one session identity (resumed or subagent
+    logs). Direct imports keep the highest ``(revision_at, event_count)`` file
+    instead of merging their cumulative snapshots, so the archive projection
+    must make the same choice. Returns ``(rank, result)`` or ``None``.
+    """
     start = next((e for e in events if e['kind'] == 'session.started'), None)
     if not start:
-        return
+        return None
     data = start['data']
     meta = {'id': start['session_id'], 'cwd': data.get('cwd'), 'timestamp': data.get('created_at'),
             'parent_id': data.get('parent_session_id'), 'forked_from_id': data.get('forked_from_session_id'),
@@ -131,7 +150,26 @@ def _rebuild(db, archive_id, session_key):
     observations = [_observation(e) for e in events if e['kind'] != 'session.deleted']
     result, _ = summarize_events(observations, meta, instance=start['instance_id'])
     if not result:
-        raise ValueError('session cannot be summarized')
+        return None
+    revision_at = max((e['occurred_at'] for e in events if e['occurred_at']), default='')
+    return (revision_at, len(events)), (result, start)
+
+
+def _rebuild(db, archive_id, session_key):
+    rows = db.execute('SELECT body FROM archive_events WHERE archive_id=? AND session_key=? ORDER BY seq',
+                      (archive_id, session_key)).fetchall()
+    events = [json.loads(row[0]) for row in rows]
+    groups = {}
+    for event in events:
+        groups.setdefault(_source_group(event), []).append(event)
+    chosen = None
+    for group in groups.values():
+        candidate = _rollout_result(group)
+        if candidate is not None and (chosen is None or candidate[0] > chosen[0]):
+            chosen = candidate
+    if chosen is None:
+        return
+    result, start = chosen[1]
     result['native_id'], result['id'] = result['id'], session_key
     for field in ('parent_id', 'forked_from_id'):
         if result.get(field):
@@ -139,7 +177,7 @@ def _rebuild(db, archive_id, session_key):
     for turn in result['turns']:
         turn['native_id'], turn['id'] = turn['id'], json.dumps([session_key, turn['id']], ensure_ascii=False, separators=(',', ':'))
     result['project_name'] = start['project_id']
-    result['title'] = data.get('title')
+    result['title'] = start['data'].get('title')
     result['source_path'] = start['source']['path']
     result['received_at'] = datetime.now(timezone.utc).isoformat()
     db.execute('INSERT OR REPLACE INTO sessions VALUES(?,?,?)', (session_key, 0, json.dumps(result, ensure_ascii=False)))
