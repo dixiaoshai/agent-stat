@@ -20,7 +20,7 @@ _ENVELOPE = {'schema_version', 'event_id', 'archive_seq', 'runtime', 'instance_i
              'session_key', 'project_id', 'kind', 'occurred_at', 'observed_at', 'native_type',
              'source', 'data', 'body', 'raw'}
 _HEX = set('0123456789abcdef')
-_RUNTIMES = {'codex', 'pi'}
+_RUNTIMES = {'codex', 'pi', 'dsh'}
 _COST_SOURCES = {'provider', 'model_rates'}
 
 

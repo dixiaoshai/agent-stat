@@ -1,8 +1,8 @@
-# Agent Stats · Codex / pi
+# Agent Stats · Codex / pi / dsh
 
-面向 Codex 与 pi 的本地用量分析工具：**本地日志 / agent-trace 元数据 → SQLite → 总览看板 → 会话 / 轮次及工具证据下钻**。
+面向 Codex、pi 与 DeepSeek Harness（`dsh`）的本地用量分析工具：**本地日志 / agent-trace 元数据 → SQLite → 总览看板 → 会话 / 轮次及工具证据下钻**。
 
-pi 通过 agent-trace 的 pi adapter 接入：会话、轮次、工具和 Token 来自 pi 的 session JSONL，费用优先使用 pi 在请求时记录的 `usage.cost.total`（provider 实报或模型费率），不再按当前价格表重算；没有记录成本的来源（如 Codex）继续按 API 标准价估算，看板会区分两种口径。
+pi 通过 agent-trace 的 pi adapter 接入：会话、轮次、工具和 Token 来自 pi 的 session JSONL，费用优先使用 pi 在请求时记录的 `usage.cost.total`（provider 实报或模型费率），不再按当前价格表重算；没有记录成本的来源（如 Codex 与 dsh）继续按 API 标准价估算，看板会区分两种口径。dsh 通过 agent-trace 的 dsh adapter 接入：Trace 解码 `session.vN.jsonl.zstd` 后提供相同的 metadata 事件，dsh 日志只记录请求级 TokenUsage，不记录请求成本。dsh 子代理会话按 header 的 `origin`/`parentSession` 归属父会话，在「各轮明细」的会话视图中嵌套在父会话下；dsh 日志没有父轮次身份，子代理轮次保持「所属父轮次未知」而不按时间猜测。
 
 所有数据都留在本机：服务只监听 `127.0.0.1`，统计库只保存元数据。任务详情可按需只读 Agent Trace 已脱敏的正文归档，正文不写入统计库。缺失的信息保持「未知」，不做近似估算。
 

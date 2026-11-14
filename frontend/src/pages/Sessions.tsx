@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Overview, Selection, Session, Turn } from '../types';
+import { buildSessionTree, type SessionNode } from '../lib/sessionTree';
 import { buildTurnTree, type TurnNode } from '../lib/turnTree';
+import {
+  flattenSessionRows,
+  flattenTurns,
+  sessionRowCount,
+  type SessionRowEntry,
+  type TurnEntry,
+} from '../lib/sessionRows';
 import { workspaceColor } from '../lib/workspaceColor';
 import {
   cacheRate,
@@ -10,31 +18,13 @@ import {
   formatPercent,
   projectName,
   sessionName,
+  sessionSourceBadge,
   statusLabel,
   turnName,
 } from '../lib/format';
 
 type Unit = 'turns' | 'sessions';
 type Sort = 'time' | 'tokens' | 'turns' | 'cost' | 'cache';
-
-type TurnEntry = { node: TurnNode<Turn>; depth: number };
-type SessionGroup = { session: Session; roots: TurnNode<Turn>[] };
-type SessionEntry = { kind: 'session'; group: SessionGroup } | ({ kind: 'turn' } & TurnEntry);
-
-function flattenTurns(tree: TurnNode<Turn>[], expanded?: Set<string>, depth = 0): TurnEntry[] {
-  const entries: TurnEntry[] = [];
-  const pending = tree.map((node) => ({ node, depth })).reverse();
-  while (pending.length) {
-    const entry = pending.pop()!;
-    entries.push(entry);
-    if (!expanded || expanded.has(entry.node.turn.id)) {
-      for (let i = entry.node.children.length - 1; i >= 0; i -= 1) {
-        pending.push({ node: entry.node.children[i], depth: entry.depth + 1 });
-      }
-    }
-  }
-  return entries;
-}
 
 export function Sessions({ data, onSelect }: { data: Overview; onSelect: (s: Selection) => void }) {
   const [unit, setUnit] = useState<Unit>('sessions');
@@ -89,43 +79,42 @@ export function Sessions({ data, onSelect }: { data: Overview; onSelect: (s: Sel
     [data.turns, rows, unit, sort, search],
   );
   const allTurnEntries = useMemo(() => flattenTurns(turnTree), [turnTree]);
-  const sessionGroups = useMemo(() => {
-    const rootsBySession = new Map<string, TurnNode<Turn>[]>();
+  const rootsBySession = useMemo(() => {
+    const roots = new Map<string, TurnNode<Turn>[]>();
     for (const node of turnTree) {
       const id = node.turn.session_id || '';
-      const group = rootsBySession.get(id) || [];
+      const group = roots.get(id) || [];
       group.push(node);
-      rootsBySession.set(id, group);
+      roots.set(id, group);
     }
-    return data.sessions
-      .slice()
-      .sort((a, b) => compare(a, b, sort))
-      .filter(
-        (session) =>
-          rootsBySession.has(session.id) ||
-          (!session.turns && (!search.trim() || rows.some((row) => row.id === session.id))),
-      )
-      .map((session) => ({ session, roots: rootsBySession.get(session.id) || [] }));
-  }, [data.sessions, turnTree, rows, sort, search]);
+    return roots;
+  }, [turnTree]);
+  const sessionTree = useMemo<SessionNode<Session>[]>(() => {
+    if (unit !== 'sessions') return [];
+    const sessions = data.sessions.slice().sort((a, b) => compare(a, b, sort));
+    // Search keeps matching sessions plus their ancestor context visible.
+    return buildSessionTree(
+      sessions,
+      search.trim() ? new Set(rows.map((row) => row.id)) : undefined,
+    );
+  }, [data.sessions, unit, rows, sort, search]);
+  const allSessionNodes = useMemo(() => {
+    const nodes: SessionNode<Session>[] = [];
+    const pending = [...sessionTree];
+    while (pending.length) {
+      const node = pending.pop()!;
+      nodes.push(node);
+      pending.push(...node.children);
+    }
+    return nodes;
+  }, [sessionTree]);
+  const sessionRowTotal = useMemo(
+    () => sessionRowCount(sessionTree, rootsBySession),
+    [sessionTree, rootsBySession],
+  );
   const visibleSessionEntries = useMemo(
-    () =>
-      sessionGroups.flatMap((group): SessionEntry[] =>
-        group.session.parent_id && group.roots.length
-          ? flattenTurns(group.roots, expanded).map((entry) => ({
-              kind: 'turn' as const,
-              ...entry,
-            }))
-          : [
-              { kind: 'session', group },
-              ...(expanded.has(group.session.id)
-                ? flattenTurns(group.roots, expanded, 1).map((entry) => ({
-                    kind: 'turn' as const,
-                    ...entry,
-                  }))
-                : []),
-            ],
-      ),
-    [sessionGroups, expanded],
+    () => flattenSessionRows(sessionTree, rootsBySession, expanded),
+    [sessionTree, rootsBySession, expanded],
   );
   const visibleTurnEntries = useMemo(() => flattenTurns(turnTree, expanded), [turnTree, expanded]);
   useEffect(() => {
@@ -135,13 +124,13 @@ export function Sessions({ data, onSelect }: { data: Overview; onSelect: (s: Sel
       (previous) =>
         new Set([
           ...previous,
-          ...sessionGroups.map(({ session }) => session.id),
+          ...allSessionNodes.map(({ session }) => session.id),
           ...allTurnEntries
             .filter(({ node }) => node.children.length)
             .map(({ node }) => node.turn.id),
         ]),
     );
-  }, [search, allTurnEntries, sessionGroups]);
+  }, [search, allSessionNodes, allTurnEntries]);
 
   return (
     <section className="view">
@@ -180,8 +169,11 @@ export function Sessions({ data, onSelect }: { data: Overview; onSelect: (s: Sel
                 (previous) =>
                   new Set([
                     ...previous,
-                    ...sessionGroups
-                      .filter(({ roots }) => roots.length)
+                    ...allSessionNodes
+                      .filter(
+                        ({ session, children }) =>
+                          (rootsBySession.get(session.id)?.length ?? 0) > 0 || children.length > 0,
+                      )
                       .map(({ session }) => session.id),
                     ...allTurnEntries
                       .filter(({ node }) => node.children.length)
@@ -199,7 +191,7 @@ export function Sessions({ data, onSelect }: { data: Overview; onSelect: (s: Sel
         </>
         <span className="muted" id="row-count">
           {unit === 'sessions'
-            ? `${sessionGroups.length} 组 · ${rows.length} 个${search.trim() ? '匹配' : ''}会话`
+            ? `${sessionRowTotal} 组 · ${rows.length} 个${search.trim() ? '匹配' : ''}会话`
             : `${rows.length} 条`}{' '}
           · 当前样本 {data.summary.token_samples}/{data.summary.turns} 轮有用量
         </span>
@@ -276,7 +268,7 @@ function TurnIdentity({
   onToggle,
   promptLabel = false,
 }: {
-  entry: TurnEntry;
+  entry: TurnEntry<Turn>;
   session?: Session;
   expanded: Set<string>;
   onToggle: (id: string) => void;
@@ -328,7 +320,7 @@ function TurnTable({
   onToggle,
   onSelect,
 }: {
-  rows: TurnEntry[];
+  rows: TurnEntry<Turn>[];
   sessions: Session[];
   expanded: Set<string>;
   onToggle: (id: string) => void;
@@ -439,7 +431,7 @@ function SessionTable({
   onToggle,
   onSelect,
 }: {
-  rows: SessionEntry[];
+  rows: SessionRowEntry<Session, Turn>[];
   sessions: Session[];
   expanded: Set<string>;
   onToggle: (id: string) => void;
@@ -475,36 +467,42 @@ function SessionTable({
       <tbody>
         {rows.map((entry) => {
           if (entry.kind === 'session') {
-            const { session: s, roots } = entry.group;
+            const s = entry.session;
+            const isExpanded = expanded.has(s.id);
+            const childCount = entry.childSessions.length;
             return (
               <tr
                 key={s.id}
-                className={`workspace-row session-row${expanded.has(s.id) ? ' is-expanded' : ''}`}
+                className={`workspace-row session-row${isExpanded ? ' is-expanded' : ''}`}
                 style={workspaceColor(s)}
                 data-session-id={s.id}
+                data-parent-session-id={s.parent_id || undefined}
+                data-depth={entry.depth}
               >
-                <td className="session-name-cell">
+                <td
+                  className="session-name-cell"
+                  style={{ paddingLeft: 8 + Math.min(entry.depth, 8) * 16 }}
+                >
                   <button
                     className="session-toggle"
-                    aria-label={`${expanded.has(s.id) ? '折叠' : '展开'}会话 ${sessionName(s)}`}
-                    aria-expanded={expanded.has(s.id)}
+                    aria-label={`${isExpanded ? '折叠' : '展开'}会话 ${sessionName(s)}`}
+                    aria-expanded={isExpanded}
                     onClick={() => onToggle(s.id)}
-                    disabled={!roots.length}
+                    disabled={!entry.turnCount && !childCount}
                   >
-                    {expanded.has(s.id) ? '▾' : '▸'}
+                    {isExpanded ? '▾' : '▸'}
                   </button>
                   <span className={s.parent_id ? 'tag subagent-badge' : 'badge'}>
-                    {s.parent_id ? '子代理' : 'CX'}
+                    {s.parent_id ? '子代理' : sessionSourceBadge(s.source)}
                   </span>
                   <span className="session-identity" title={sessionName(s)}>
                     {sessionName(s)}
                   </span>
-                  {s.parent_id && (
-                    <small className="sub session-parent-note">
-                      {roots.some(({ turn }) => turn.parent_turn_id)
-                        ? '父轮次不在当前范围'
-                        : '所属父轮次未知'}
-                    </small>
+                  {childCount > 0 && (
+                    <small className="sub session-child-count">{childCount} 个子代理</small>
+                  )}
+                  {entry.parentMissing && (
+                    <small className="sub session-parent-note">父会话不在当前范围</small>
                   )}
                 </td>
                 <td>{formatDate(s.started_at)}</td>

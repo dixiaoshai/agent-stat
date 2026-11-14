@@ -81,7 +81,7 @@ export default function App() {
         <header className="app-header">
           <div>
             <h1>Agent token stats</h1>
-            <p>Codex / pi · 本地会话数据 · 手动刷新采集 · 仅 127.0.0.1</p>
+            <p>Codex / pi / dsh · 本地会话数据 · 手动刷新采集 · 仅 127.0.0.1</p>
           </div>
           <div className="header-actions">
             <button onClick={() => void refresh()} disabled={refreshing}>

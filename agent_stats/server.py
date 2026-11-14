@@ -11,7 +11,7 @@ from .content import ContentError, ContentReader
 
 
 CAPABILITIES = {
-    "source": "codex+pi", "adapter_version": "1", "mode": "local rollout JSONL / agent-trace metadata / manual refresh",
+    "source": "codex+pi+dsh", "adapter_version": "1", "mode": "local rollout JSONL / agent-trace metadata / manual refresh",
     "items": [
         {"name": "会话与轮次", "status": "已验证 / 版本相关", "detail": "session_meta.id；turn_context.turn_id；task_started/task_complete 生命周期。无稳定轮次身份时保留推断或未归属说明。"},
         {"name": "子代理父轮次", "status": "明确身份关联 / 部分覆盖", "detail": "每个子代理轮次记录 root_turn_id，仅在其直接父会话中找到唯一匹配轮次时挂载到该轮。复用的子会话逐轮关联；归属未知或父轮次不在筛选范围时单列标注，不按时间猜测。"},
@@ -25,6 +25,7 @@ CAPABILITIES = {
         {"name": "模型请求数", "status": "不支持", "detail": "没有可靠逐请求身份，不从 token_count 快照或工具次数反推请求数。"},
         {"name": "子 Agent 与分叉", "status": "本机样本验证 / 版本相关", "detail": "保留明确的父子关系；基于本机样本，按各会话新增用量合计。分叉聊天扣除可确认的继承历史；基线缺失或无效时保留未知并提示。旧记录缺少计量标记时，父子同现需刷新采集。"},
         {"name": "pi 适配", "status": "请求级用量 / 记录成本", "detail": "消费 agent-trace 的 pi metadata：按用户 entry 合成轮次，assistant 请求的 input+cacheRead 计入输入，工具调用按 call id 关联；直接使用 pi 记录的 cost.total（provider 实报或模型费率），不以当前 OpenAI 单价重算。fork/clone 按 header 时间跳过复制历史。"},
+        {"name": "dsh 适配", "status": "请求级用量 / 无记录成本", "detail": "消费 agent-trace 的 dsh metadata：Trace 解码拼接 Zstandard 会话，按 turn/start、turn/end、assistant/message、tool/call 与 tool/result 映射；inputTokens+cacheReadTokens 计入输入，按请求用量合成累计快照。子代理会话按 dsh header 的 origin/parentSession 归属父会话并嵌套展示，dsh 日志没有父轮次身份，不按时间猜测；seeded 继承前缀不重复计量。dsh 日志不记录请求成本，费用只作 API 标准价估算。"},
         {"name": "隐私", "status": "统计元数据与短摘要", "detail": "保存会话显示名称、最多 80 字符的 Prompt 轮次摘要与统计元数据，不保存完整 prompt、思考、命令、工具参数或输出正文。摘要、名称、项目路径、身份及文件定位仍可能包含敏感信息，仅保存在本机，无上传。"},
     ],
     "documentation": "docs/CODEX-CAPABILITIES.md",
@@ -40,7 +41,7 @@ def make_server(store, paths, port=8765, instance="local", archive_only=False, c
         {'name': '执行正文', 'status': '按需读取 Trace content 归档',
          'detail': '任务详情展示已脱敏的请求、回复、推理摘要和工具输入输出；正文不写入统计库，不依赖 Knowledge。未覆盖的任务明确提示。'}]
     if archive_only:
-        capabilities["mode"] = "agent-trace metadata archive / no Codex or pi source access"
+        capabilities["mode"] = "agent-trace metadata archive / no Codex, pi or dsh source access"
     # Archive-only refresh reports the already-received projection without
     # touching Codex logs; it never pretends to have imported anything.
     archive_only_report = {

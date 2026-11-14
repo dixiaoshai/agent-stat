@@ -141,11 +141,28 @@ class PiArchiveTests(unittest.TestCase):
         misplaced = record(2, 'message.user', {'turn_id': 'u', 'cost_usd': 1})
         with self.assertRaises(ValueError):
             import_batch(self.store, page(0, 2, base + [misplaced]))
-        # A pi event id is adapter-defined; the Codex line-number formula is not applied.
+        # A pi or dsh event id is adapter-defined; the Codex line-number formula is not applied.
         ok = record(2, 'usage.snapshot', usage('u', {'input_tokens': 1, 'total_tokens': 1},
                                                {'input_tokens': 1, 'total_tokens': 1}, cost=0))
         import_batch(self.store, page(0, 2, base + [ok]))
         self.assertEqual(self.store.query()['summary']['token_total'], 1)
+
+    def test_dsh_runtime_is_accepted_with_per_request_usage(self):
+        rows = [
+            record(1, 'session.started', {'cwd': '/demo', 'created_at': '2026-01-01T10:00:00Z'},
+                   sid='session-demo', runtime='dsh'),
+            record(2, 'turn.started', {'turn_id': '1'}, sid='session-demo', runtime='dsh'),
+            record(3, 'usage.snapshot', usage('1', {'input_tokens': 10, 'total_tokens': 10},
+                                              {'input_tokens': 10, 'total_tokens': 10}),
+                   sid='session-demo', runtime='dsh'),
+            record(4, 'turn.completed', {'turn_id': '1'}, sid='session-demo', runtime='dsh'),
+        ]
+        import_batch(self.store, page(0, 4, rows))
+        data = self.store.query()
+        self.assertEqual(data['summary']['token_total'], 10)
+        self.assertEqual(data['sessions'][0]['source'], 'dsh')
+        detail = self.store.detail(data['sessions'][0]['id'])['session']
+        self.assertEqual(detail['usage_accounting'], 'per_session')
 
     def test_pi_deletion_removes_projection(self):
         rows = [
