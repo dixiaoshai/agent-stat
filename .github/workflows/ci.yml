@@ -58,17 +58,26 @@ jobs:
       - name: Production build
         run: npm run build
 
+  sensitive:
+    name: Sensitive data scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Scan tracked files
+        run: python3 scripts/check_sensitive.py
+
   # Single required check for branch protection; keeps matrix job names out of the rule.
   ci-success:
     name: CI success
     if: always()
-    needs: [python, frontend]
+    needs: [python, frontend, sensitive]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Verify all jobs passed
         run: |
-          if [ "${{ needs.python.result }}" != "success" ] || [ "${{ needs.frontend.result }}" != "success" ]; then
-            echo "python=${{ needs.python.result }} frontend=${{ needs.frontend.result }}"
+          if [ "${{ needs.python.result }}" != "success" ] || [ "${{ needs.frontend.result }}" != "success" ] || [ "${{ needs.sensitive.result }}" != "success" ]; then
+            echo "python=${{ needs.python.result }} frontend=${{ needs.frontend.result }} sensitive=${{ needs.sensitive.result }}"
             exit 1
           fi

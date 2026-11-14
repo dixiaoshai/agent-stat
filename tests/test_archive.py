@@ -171,3 +171,98 @@ class ArchiveTests(unittest.TestCase):
     def test_missing_title_stays_unknown(self):
         import_batch(self.store, page(0, 7, self.rows))
         self.assertIsNone(self.store.query()['sessions'][0]['title'])
+
+
+    def test_folded_source_series_is_part_of_the_identifier(self):
+        start = record(1, 'session.started', {'cwd': '/demo', 'created_at': '2026-01-01T10:00:00Z'})
+        folded = record(2, 'turn.started', {'turn_id': 'turn'})
+        folded['source']['series'] = 'child-identity'
+        native = json.dumps(['codex', 'local', 'synthetic', 'child-identity', 2],
+                            ensure_ascii=False, separators=(',', ':'))
+        folded['event_id'] = hashlib.sha256(native.encode('utf-8')).hexdigest()
+        import_batch(self.store, page(0, 2, [start, folded]))
+        self.assertEqual(self.store.db.execute('SELECT cursor FROM archive_cursors').fetchone()[0], 2)
+
+        bad = record(3, 'turn.started', {'turn_id': 'turn'})
+        bad['source']['series'] = 'synthetic'
+        with self.assertRaises(ValueError):
+            import_batch(self.store, page(2, 3, [bad]))
+        empty = record(3, 'turn.started', {'turn_id': 'turn'})
+        empty['source']['series'] = ''
+        with self.assertRaises(ValueError):
+            import_batch(self.store, page(2, 3, [empty]))
+        self.assertEqual(self.store.db.execute('SELECT cursor FROM archive_cursors').fetchone()[0], 2)
+
+    def test_archive_rebuild_keeps_the_same_revision_as_direct_import(self):
+        def event(seq, kind, data, series, occurred, path, sid='shared-session'):
+            row = record(seq, kind, data, sid)
+            row['occurred_at'] = occurred
+            row['source'] = {'path': path, 'line': seq, 'record_hash': format(seq + 70, '064x'), 'series': series}
+            native = json.dumps(['codex', 'local', sid, series, seq], ensure_ascii=False, separators=(',', ':'))
+            row['event_id'] = hashlib.sha256(native.encode('utf-8')).hexdigest()
+            return row
+
+        def usage(cumulative, last):
+            return {'turn_id': last, 'cumulative': {k: v for k, v in cumulative.items()},
+                    'last_usage': dict(last_usage)}
+
+        # Two rollouts of one session: the shorter one ends first, the longer
+        # one has a later revision and an extra turn.
+        short = [
+            event(1, 'session.started', {'cwd': '/demo', 'created_at': '2026-01-01T10:00:00Z'}, 'short-file', '2026-01-01T10:00:00Z', '/demo/short.jsonl'),
+            event(2, 'turn.started', {'turn_id': 't1'}, 'short-file', '2026-01-01T10:00:01Z', '/demo/short.jsonl'),
+            event(3, 'turn.context', {'turn_id': 't1', 'model': 'demo'}, 'short-file', '2026-01-01T10:00:02Z', '/demo/short.jsonl'),
+            event(4, 'usage.snapshot', {'turn_id': 't1', 'cumulative': {'input_tokens': 100, 'output_tokens': 20, 'total_tokens': 120},
+                                        'last_usage': {'input_tokens': 100, 'output_tokens': 20, 'total_tokens': 120}},
+                  'short-file', '2026-01-01T10:00:03Z', '/demo/short.jsonl'),
+            event(5, 'turn.completed', {'turn_id': 't1'}, 'short-file', '2026-01-01T10:00:04Z', '/demo/short.jsonl'),
+        ]
+        long = [
+            event(1, 'session.started', {'cwd': '/demo', 'created_at': '2026-01-01T10:00:00Z'}, 'long-file', '2026-01-01T10:00:00Z', '/demo/long.jsonl'),
+            event(2, 'turn.started', {'turn_id': 't1'}, 'long-file', '2026-01-01T10:00:01Z', '/demo/long.jsonl'),
+            event(3, 'turn.context', {'turn_id': 't1', 'model': 'demo'}, 'long-file', '2026-01-01T10:00:02Z', '/demo/long.jsonl'),
+            event(4, 'usage.snapshot', {'turn_id': 't1', 'cumulative': {'input_tokens': 100, 'output_tokens': 20, 'total_tokens': 120},
+                                        'last_usage': {'input_tokens': 100, 'output_tokens': 20, 'total_tokens': 120}},
+                  'long-file', '2026-01-01T10:00:03Z', '/demo/long.jsonl'),
+            event(5, 'turn.completed', {'turn_id': 't1'}, 'long-file', '2026-01-01T10:00:04Z', '/demo/long.jsonl'),
+            event(6, 'turn.started', {'turn_id': 't2'}, 'long-file', '2026-01-01T10:05:00Z', '/demo/long.jsonl'),
+            event(7, 'turn.context', {'turn_id': 't2', 'model': 'demo'}, 'long-file', '2026-01-01T10:05:01Z', '/demo/long.jsonl'),
+            event(8, 'usage.snapshot', {'turn_id': 't2', 'cumulative': {'input_tokens': 150, 'output_tokens': 20, 'total_tokens': 170},
+                                        'last_usage': {'input_tokens': 50, 'output_tokens': 0, 'total_tokens': 50}},
+                  'long-file', '2026-01-01T10:05:02Z', '/demo/long.jsonl'),
+            event(9, 'turn.completed', {'turn_id': 't2'}, 'long-file', '2026-01-01T10:05:03Z', '/demo/long.jsonl'),
+        ]
+        for index, row in enumerate(long, start=6):
+            row['archive_seq'] = index
+            row['source']['line'] = index
+            native_id = json.dumps(['codex', 'local', 'shared-session', 'long-file', index],
+                                   ensure_ascii=False, separators=(',', ':'))
+            row['event_id'] = hashlib.sha256(native_id.encode('utf-8')).hexdigest()
+        import_batch(self.store, page(0, 5, short))
+        import_batch(self.store, page(5, 14, long))
+
+        native = [
+            {'type': 'session_meta', 'payload': {'id': 'shared-session', 'cwd': '/demo', 'timestamp': '2026-01-01T10:00:00Z'}},
+            {'type': 'event_msg', 'payload': {'type': 'task_started', 'turn_id': 't1'}},
+            {'type': 'turn_context', 'payload': {'turn_id': 't1', 'model': 'demo'}},
+            {'type': 'event_msg', 'payload': {'type': 'token_count', 'turn_id': 't1', 'info': {'total_token_usage': {'input_tokens': 100, 'output_tokens': 20, 'total_tokens': 120}, 'last_token_usage': {'input_tokens': 100, 'output_tokens': 20, 'total_tokens': 120}}}},
+            {'type': 'event_msg', 'payload': {'type': 'task_complete', 'turn_id': 't1'}},
+            {'type': 'event_msg', 'payload': {'type': 'task_started', 'turn_id': 't2'}},
+            {'type': 'turn_context', 'payload': {'turn_id': 't2', 'model': 'demo'}},
+            {'type': 'event_msg', 'payload': {'type': 'token_count', 'turn_id': 't2', 'info': {'total_token_usage': {'input_tokens': 150, 'output_tokens': 20, 'total_tokens': 170}, 'last_token_usage': {'input_tokens': 50, 'output_tokens': 0, 'total_tokens': 50}}}},
+            {'type': 'event_msg', 'payload': {'type': 'task_complete', 'turn_id': 't2'}},
+        ]
+        for index, row in enumerate(native, 1):
+            row['timestamp'] = '2026-01-01T10:0%d:0%dZ' % (index, index)
+        source = self.root / 'long.jsonl'
+        source.write_text(''.join(json.dumps(row) + '\n' for row in native), encoding='utf-8')
+        direct = Store(self.root / 'direct.sqlite3')
+        self.addCleanup(direct.db.close)
+        direct.import_paths([source])
+        expected = direct.query()['summary']
+        actual = self.store.query()['summary']
+        self.assertEqual(expected['token_total'], 170)
+        self.assertEqual(actual['token_total'], expected['token_total'])
+        self.assertEqual(actual['token_known'], expected['token_known'])
+        self.assertEqual(actual['turns'], expected['turns'])
+        self.assertEqual(self.store.query()['sessions'][0]['turns'], 2)

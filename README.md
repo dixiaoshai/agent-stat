@@ -19,6 +19,8 @@ python3 -m agent_stats serve
 
 访问 <http://127.0.0.1:8765/>。
 
+本机当前正式部署使用 `follow` + `serve --archive-only`：看板只读已接收数据，新会话由 `follow` 从本机 agent-trace API 拉取，不再直接读取 Codex 日志。安装/重启见 [运行说明](docs/RUNNING.md) 的“macOS 登录自动启动”。
+
 默认数据库为 `~/.local/share/agent-stats/stats.sqlite3`；受限环境可加全局参数 `--db .agent-stats/stats.sqlite3`。
 
 先看纯合成演示（不读真实日志）：
@@ -95,7 +97,13 @@ npm run check     # tsc --noEmit
 npm run build     # 输出到 agent_stats/static
 ```
 
-CI 会在每个 Pull Request 上运行 Python 3.9 / 3.13 与前端全套检查，结果汇总为 `CI success`；`main` 分支要求该检查通过后才能合并。
+CI 会在每个 Pull Request 上运行 Python 3.9 / 3.13、前端全套检查，以及敏感信息扫描，结果汇总为 `CI success`；`main` 分支要求该检查通过后才能合并。
+
+提交前可本地先跑一遍敏感信息扫描（token、私钥、URL 内嵌凭证、个人主目录路径、`.env` 之类文件），命中即失败：
+
+```bash
+python3 scripts/check_sensitive.py
+```
 
 ## 数据与隐私
 
