@@ -4,6 +4,13 @@ export const turnName = (turn: Turn) =>
   turn.title || (turn.sequence ? `第 ${turn.sequence} 轮 · 无可读 Prompt` : '无可读 Prompt 的轮次');
 export const sessionName = (session: { title?: string | null; parent_id?: string | null }) =>
   session.title || (session.parent_id ? '子代理会话' : '未命名会话');
+const SOURCE_BADGES: Record<string, string> = { codex: 'CX', pi: 'PI', dsh: 'DSH' };
+/** Short source badge for a root session row: codex -> CX, pi -> PI, dsh -> DSH. */
+export const sessionSourceBadge = (source: string | null | undefined) => {
+  const value = (source ?? '').trim();
+  if (!value) return '未知';
+  return SOURCE_BADGES[value.toLocaleLowerCase()] ?? value.toLocaleUpperCase();
+};
 export const projectName = (project: { project?: string | null; project_name?: string | null }) =>
   project.project_name ||
   project.project
