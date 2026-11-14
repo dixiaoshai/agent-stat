@@ -1,10 +1,14 @@
 export interface FilterControls {
   range: string;
+  source: string;
   project: string;
   model: string;
   start: string;
   end: string;
 }
+
+const AGENT_LABELS: Record<string, string> = { codex: 'Codex', pi: 'pi' };
+const agentLabel = (source: string) => AGENT_LABELS[source] ?? source;
 
 export interface ProjectOption {
   path: string;
@@ -13,11 +17,13 @@ export interface ProjectOption {
 
 export function FiltersBar({
   value,
+  sources,
   projects,
   models,
   onChange,
 }: {
   value: FilterControls;
+  sources: string[];
   projects: ProjectOption[];
   models: string[];
   onChange: (value: FilterControls) => void;
@@ -37,8 +43,17 @@ export function FiltersBar({
       </label>
       <label>
         Agent{' '}
-        <select aria-label="Agent" disabled>
-          <option>Codex</option>
+        <select
+          aria-label="Agent"
+          value={value.source}
+          onChange={(e) => update('source', e.target.value)}
+        >
+          <option value="">全部 Agent</option>
+          {sources.map((source) => (
+            <option key={source} value={source}>
+              {agentLabel(source)}
+            </option>
+          ))}
         </select>
       </label>
       <label>
