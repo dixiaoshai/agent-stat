@@ -151,3 +151,23 @@ class ArchiveTests(unittest.TestCase):
             import_batch(self.store, page(3, 4, [bad]))
         import_batch(self.store, page(3, 7, self.rows[3:]))
         self.assertEqual(self.store.query()['summary']['token_total'], 120)
+
+
+    def test_session_title_is_kept_and_bounded(self):
+        titled = json.loads(json.dumps(self.rows))
+        titled[0]['data']['title'] = '共享会话名称'
+        import_batch(self.store, page(0, 7, titled))
+        self.assertEqual(self.store.query()['sessions'][0]['title'], '共享会话名称')
+
+        bad = record(8, 'session.started', {'cwd': '/other', 'title': 'two\nlines'}, sid='other')
+        with self.assertRaises(ValueError):
+            import_batch(self.store, page(7, 8, [bad]))
+        self.assertEqual(self.store.db.execute('SELECT cursor FROM archive_cursors').fetchone()[0], 7)
+
+        too_long = record(8, 'session.started', {'cwd': '/other', 'title': 'x' * 81}, sid='other')
+        with self.assertRaises(ValueError):
+            import_batch(self.store, page(7, 8, [too_long]))
+
+    def test_missing_title_stays_unknown(self):
+        import_batch(self.store, page(0, 7, self.rows))
+        self.assertIsNone(self.store.query()['sessions'][0]['title'])

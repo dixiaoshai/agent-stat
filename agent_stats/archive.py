@@ -7,7 +7,7 @@ from .codex import FIELDS, summarize_events, timestamp, usage_total
 
 _COMMON = {'turn_id', 'root_turn_id', 'model'}
 _FIELDS = {
-    'session.started': {'cwd', 'parent_session_id', 'forked_from_session_id', 'created_at', 'cli_version'},
+    'session.started': {'cwd', 'parent_session_id', 'forked_from_session_id', 'created_at', 'cli_version', 'title'},
     'turn.context': set(), 'turn.started': set(), 'turn.completed': set(), 'turn.interrupted': set(),
     'message.user': {'title'}, 'message.assistant': set(), 'reasoning.summary': {'available'},
     'tool.called': {'call_id', 'name', 'input_bytes'},
@@ -139,7 +139,7 @@ def _rebuild(db, archive_id, session_key):
     for turn in result['turns']:
         turn['native_id'], turn['id'] = turn['id'], json.dumps([session_key, turn['id']], ensure_ascii=False, separators=(',', ':'))
     result['project_name'] = start['project_id']
-    result['title'] = None
+    result['title'] = data.get('title')
     result['source_path'] = start['source']['path']
     result['received_at'] = datetime.now(timezone.utc).isoformat()
     db.execute('INSERT OR REPLACE INTO sessions VALUES(?,?,?)', (session_key, 0, json.dumps(result, ensure_ascii=False)))
