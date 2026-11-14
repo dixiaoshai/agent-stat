@@ -26,14 +26,3 @@ updates:
       frontend-minor-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
-
-  # Backend is stdlib-only today; this activates automatically once a
-  # dependency is declared in pyproject.toml / setup.cfg.
-  - package-ecosystem: "pip"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    commit-message:
-      prefix: "chore(deps)"
-    open-pull-requests-limit: 5
