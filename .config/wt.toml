@@ -1,0 +1,8 @@
+# Worktrunk project hooks — https://worktrunk.dev
+#
+# agent-stats has no runtime dependencies (stdlib + unittest), so there is
+# nothing to install per worktree. PYTHONPATH=. makes the checked-out source
+# importable without an editable install.
+
+[pre-merge]
+test = "PYTHONPATH=. python3 -m unittest discover -s tests -q"

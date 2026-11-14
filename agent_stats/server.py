@@ -2,6 +2,7 @@
 import json
 import re
 import threading
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -27,9 +28,19 @@ CAPABILITIES = {
 }
 
 
-def make_server(store, paths, port=8765, instance="local"):
+def make_server(store, paths, port=8765, instance="local", archive_only=False):
     lock = threading.RLock()
     static = Path(__file__).parent / "static"
+    capabilities = dict(CAPABILITIES)
+    if archive_only:
+        capabilities["mode"] = "agent-trace metadata archive / no Codex source access"
+    # Archive-only refresh reports the already-received projection without
+    # touching Codex logs; it never pretends to have imported anything.
+    archive_only_report = {
+        "scanned": 0, "imported": 0, "skipped": 0, "errors": [],
+        "warnings": ["归档只读模式：本次刷新未读取 Codex 源日志，仅重新读取已接收的数据。"],
+        "mode": "archive_only",
+    }
 
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
@@ -76,7 +87,7 @@ def make_server(store, paths, port=8765, instance="local"):
                         if result is None:
                             return self.respond(404, {"error": "会话不存在"})
                     elif url.path == "/api/capabilities":
-                        result = CAPABILITIES
+                        result = capabilities
                     elif url.path in ("/", "/index.html") or re.fullmatch(r"/assets/[A-Za-z0-9_-]+\.(?:js|css)", url.path):
                         filename = "index.html" if url.path == "/" else url.path[1:]
                         if not (static / filename).is_file():
@@ -103,6 +114,10 @@ def make_server(store, paths, port=8765, instance="local"):
                 if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                     return self.respond(415, {"error": "需要 application/json"})
                 json.loads(self.rfile.read(size) or b"{}")
+                if archive_only:
+                    report = dict(archive_only_report)
+                    report["received_at"] = datetime.now(timezone.utc).isoformat()
+                    return self.respond(200, report)
                 with lock:
                     result = store.import_paths(paths, instance=instance)
                 self.respond(200, result)
