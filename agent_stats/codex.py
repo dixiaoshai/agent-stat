@@ -109,7 +109,7 @@ def parse_rollout(path, instance='local'):
     return summarize_events(events, meta, warnings, instance)
 
 
-def summarize_events(events, meta, warnings=None, instance='local'):
+def summarize_events(events, meta, warnings=None, instance='local', runtime='codex'):
     """Aggregate sanitized observations without reading or retaining source bodies."""
     warnings = list(warnings or [])
     sid = meta.get('id') or meta.get('session_id')
@@ -154,8 +154,9 @@ def summarize_events(events, meta, warnings=None, instance='local'):
                           'title': explicit_titles.pop(tid, None),
                           'token_total': None, 'input_tokens': None, 'cached_input_tokens': None,
                           'output_tokens': None, 'reasoning_output_tokens': None, 'cache_write_input_tokens': None,
+                          'recorded_cost_usd': None, 'recorded_cost_source': None,
                           'tools': [], 'evidence': [], 'attribution': 'unassigned' if tid == 'unassigned' else ('inferred' if inferred else 'native'),
-                          '_seen': set(), '_missing': set(), '_unrecoverable': set()}
+                          '_seen': set(), '_missing': set(), '_unrecoverable': set(), '_cost_sources': set()}
         t = turns[tid]
         if stamp and (not t['started_at'] or stamp < t['started_at']):
             t['started_at'] = stamp
@@ -277,6 +278,23 @@ def summarize_events(events, meta, warnings=None, instance='local'):
                     # Crossing the old high-water mark does not restore a
                     # trustworthy epoch after a counter reset.
                     t['_unrecoverable'].update(FIELDS)
+                # Pi has no turn_context record; assistant usage carries the
+                # physical model instead.
+                turn_model = p.get('model')
+                if isinstance(turn_model, str) and turn_model:
+                    if t['model'] and t['model'] != turn_model:
+                        t['model'] = '混合模型'
+                        warnings.append('同一轮次出现多个模型，未拆分模型用量')
+                    else:
+                        t['model'] = turn_model
+                # Recorded cost belongs to this request (last_usage), not to the
+                # cumulative snapshot. It survives replay detection above.
+                request_cost = p.get('cost_usd')
+                if request_cost is not None:
+                    t['recorded_cost_usd'] = (t['recorded_cost_usd'] or 0) + request_cost
+                    cost_source = p.get('cost_source')
+                    if isinstance(cost_source, str) and cost_source:
+                        t['_cost_sources'].add(cost_source)
                 apply_title(t)
                 if not explicit and target:
                     t['attribution'] = 'inferred usage via turn_context'
@@ -335,6 +353,11 @@ def summarize_events(events, meta, warnings=None, instance='local'):
         # Preserve positive write evidence even when incomplete later snapshots
         # make the total unknown. Pricing cannot then assume no paid writes.
         t['cache_write_observed'] = (t.get('cache_write_input_tokens') or 0) > 0
+        cost_sources = t.pop('_cost_sources')
+        # A turn can mix provider-reported and locally computed costs; do not
+        # present a single basis when that happened.
+        t['recorded_cost_source'] = (next(iter(cost_sources)) if len(cost_sources) == 1
+                                     else ('mixed' if cost_sources else None))
         for key in t.pop('_missing') | t.pop('_unrecoverable'):
             t['token_total' if key == 'total_tokens' else key] = None
         t.pop('_seen')
@@ -342,13 +365,19 @@ def summarize_events(events, meta, warnings=None, instance='local'):
         t['tools'].sort(key=lambda x: x['line'])
     if warnings:
         warnings = list(dict.fromkeys(warnings))
-    return {'id': sid, 'source': 'codex', 'instance': instance, 'project': meta.get('cwd'),
+    if runtime == 'pi':
+        # Pi usage is recorded per request; the adapter only synthesizes a
+        # cumulative snapshot for consumers that need deltas.
+        usage_accounting = 'per_session' if not fork_time_uncertain else 'unknown'
+    else:
+        usage_accounting = ('per_session' if not accounting_conflict and not fork_time_uncertain and
+                            (meta.get('cli_version') in PER_SESSION_VERSIONS or
+                             (accounting_evidence and not accounting_missing)) else 'unknown')
+    return {'id': sid, 'source': runtime, 'instance': instance, 'project': meta.get('cwd'),
             'started_at': timestamp(meta.get('timestamp')) or next((e[0] for e in events if e[0]), None),
             'status': 'unknown', 'parent_id': parent if isinstance(parent, str) else None,
             'forked_from_id': forked_from,
-            'usage_accounting': ('per_session' if not accounting_conflict and not fork_time_uncertain and
-                                 (meta.get('cli_version') in PER_SESSION_VERSIONS or
-                                  (accounting_evidence and not accounting_missing)) else 'unknown'),
+            'usage_accounting': usage_accounting,
             'cli_version': meta.get('cli_version'), 'turns': result_turns,
             'warnings': warnings, 'revision_at': max((e[0] for e in events if e[0]), default=''),
             'event_count': len(events)}, warnings

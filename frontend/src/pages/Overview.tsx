@@ -138,6 +138,14 @@ export function Overview({
       </details>
       <details className="panel overview-support pricing-details">
         <summary>估算依据与模型单价 · {data.pricing.checked_at}</summary>
+        {data.summary.cost_basis === 'recorded' ? (
+          <p>
+            费用来自代理在请求时记录的金额（pi），不是按当前 OpenAI
+            单价重算的估算值，也不是实际账单。
+          </p>
+        ) : data.summary.cost_basis === 'mixed' ? (
+          <p>费用混合了代理记录成本与按 OpenAI 单价估算的值；合计只作参考，不能当作实际账单。</p>
+        ) : null}
         <p>
           {data.pricing.basis} ·{' '}
           <a href={data.pricing.source_url} target="_blank" rel="noreferrer">

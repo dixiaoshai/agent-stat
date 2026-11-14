@@ -402,7 +402,13 @@ function TurnTable({
                 </small>
               </td>
               <td>{formatNumber(t.output_tokens)}</td>
-              <td title={t.estimated_cost_reason || '按 API 标准短上下文单价估算'}>
+              <td
+                title={
+                  t.cost_basis === 'recorded'
+                    ? 'pi 记录的请求成本，非实际账单'
+                    : t.estimated_cost_reason || '按 API 标准短上下文单价估算'
+                }
+              >
                 {formatCost(t.estimated_cost)}
               </td>
               <td>未知</td>
@@ -533,7 +539,12 @@ function SessionTable({
                 <td className="cost-cell">
                   {formatCost(s.estimated_cost_known)}
                   <small className="sub">
-                    {s.cost_samples}/{s.turns} 轮可估算
+                    {s.cost_samples}/{s.turns} 轮
+                    {s.cost_basis === 'recorded'
+                      ? '记录成本'
+                      : s.cost_basis === 'mixed'
+                        ? '记录/估算成本'
+                        : '可估算'}
                     {s.cost_samples < s.turns && s.cost_samples > 0 ? ' · 已知小计' : ''}
                   </small>
                 </td>
@@ -597,7 +608,13 @@ function SessionTable({
                   占输入 {formatPercent(cacheRate(turn.input_tokens, turn.cached_input_tokens))}
                 </small>
               </td>
-              <td title={turn.estimated_cost_reason || '按 API 标准短上下文单价估算'}>
+              <td
+                title={
+                  turn.cost_basis === 'recorded'
+                    ? 'pi 记录的请求成本，非实际账单'
+                    : turn.estimated_cost_reason || '按 API 标准短上下文单价估算'
+                }
+              >
                 {formatCost(turn.estimated_cost)}
               </td>
               <td>

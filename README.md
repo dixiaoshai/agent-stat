@@ -1,6 +1,8 @@
-# Agent Stats · Codex
+# Agent Stats · Codex / pi
 
-面向 Codex 的本地用量分析工具：**本地 Codex 日志采集 → SQLite → 总览看板 → 会话 / 轮次及工具证据下钻**。
+面向 Codex 与 pi 的本地用量分析工具：**本地日志 / agent-trace 元数据 → SQLite → 总览看板 → 会话 / 轮次及工具证据下钻**。
+
+pi 通过 agent-trace 的 pi adapter 接入：会话、轮次、工具和 Token 来自 pi 的 session JSONL，费用优先使用 pi 在请求时记录的 `usage.cost.total`（provider 实报或模型费率），不再按当前价格表重算；没有记录成本的来源（如 Codex）继续按 API 标准价估算，看板会区分两种口径。
 
 所有数据都留在本机：服务只监听 `127.0.0.1`，只保存统计元数据，不保存提示词、命令、思考过程或工具输出正文。缺失的信息保持「未知」，不做近似估算。
 

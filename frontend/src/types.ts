@@ -60,6 +60,9 @@ export interface Turn {
   estimated_cost: Metric;
   estimated_cost_reason: string | null;
   cost_breakdown: { input: number; cached_input: number; output: number } | null;
+  cost_basis?: 'recorded' | 'estimated' | 'mixed' | null;
+  cost_source?: 'provider' | 'model_rates' | 'mixed' | null;
+  recorded_cost_usd?: Metric;
   tools: ToolRecord[];
   evidence: Evidence[];
   attribution: string;
@@ -80,6 +83,10 @@ export interface Session {
   estimated_cost: Metric;
   estimated_cost_known: Metric;
   cost_samples: number;
+  cost_basis?: 'recorded' | 'estimated' | 'mixed' | null;
+  recorded_cost?: Metric;
+  recorded_cost_known?: Metric;
+  recorded_cost_samples?: number;
   turns: number;
   tools: number;
   parent_id: string | null;
@@ -103,6 +110,10 @@ export interface Summary {
   estimated_cost_known: Metric;
   observed_estimated_cost_known: Metric;
   cost_samples: number;
+  cost_basis?: 'recorded' | 'estimated' | 'mixed' | null;
+  recorded_cost?: Metric;
+  recorded_cost_known?: Metric;
+  recorded_cost_samples?: number;
   aggregation_blocked: boolean;
 }
 export interface Pricing {
