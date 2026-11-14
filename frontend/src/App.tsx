@@ -8,7 +8,14 @@ import { Overview } from './pages/Overview';
 import { Sessions } from './pages/Sessions';
 import { Source } from './pages/Source';
 
-const initialFilters: FilterControls = { range: '7', project: '', model: '', start: '', end: '' };
+const initialFilters: FilterControls = {
+  range: '7',
+  source: '',
+  project: '',
+  model: '',
+  start: '',
+  end: '',
+};
 const emptyFilters: Filters = {};
 const pages: { id: Page; label: string }[] = [
   { id: 'overview', label: 'Overview' },
@@ -20,7 +27,12 @@ export default function App() {
   const [page, setPage] = useState<Page>('overview');
   const [controls, setControls] = useState(initialFilters);
   const [selection, setSelection] = useState<Selection | null>(null);
-  const [facets, setFacets] = useState<{ projects: ProjectOption[]; models: string[] }>({
+  const [facets, setFacets] = useState<{
+    sources: string[];
+    projects: ProjectOption[];
+    models: string[];
+  }>({
+    sources: [],
     projects: [],
     models: [],
   });
@@ -31,6 +43,7 @@ export default function App() {
       if (controls.end) result.end = new Date(controls.end).toISOString();
     } else if (controls.range !== 'all')
       result.start = new Date(Date.now() - Number(controls.range) * 86400000).toISOString();
+    if (controls.source) result.source = controls.source;
     if (controls.project) result.project = controls.project;
     if (controls.model) result.model = controls.model;
     return result;
@@ -40,6 +53,12 @@ export default function App() {
   useEffect(() => {
     if (!data) return;
     setFacets((previous) => ({
+      sources: [
+        ...new Set([
+          ...previous.sources,
+          ...data.sessions.map((session) => session.source).filter(Boolean),
+        ]),
+      ].sort(),
       projects: [
         ...new Map([
           ...previous.projects.map((project) => [project.path, project] as const),
@@ -62,7 +81,7 @@ export default function App() {
         <header className="app-header">
           <div>
             <h1>Agent token stats</h1>
-            <p>Codex · 本地会话数据 · 手动刷新采集 · 仅 127.0.0.1</p>
+            <p>Codex / pi · 本地会话数据 · 手动刷新采集 · 仅 127.0.0.1</p>
           </div>
           <div className="header-actions">
             <button onClick={() => void refresh()} disabled={refreshing}>
@@ -77,6 +96,7 @@ export default function App() {
         </header>
         <FiltersBar
           value={controls}
+          sources={facets.sources}
           projects={facets.projects}
           models={facets.models}
           onChange={setControls}
