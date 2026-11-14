@@ -107,6 +107,10 @@ CI 会在每个 Pull Request 上运行 Python 3.9 / 3.13、前端全套检查，
 python3 scripts/check_sensitive.py
 ```
 
+## 参与贡献
+
+CI 流水线、`main` 分支保护、Dependabot 和敏感信息检查的详细说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。所有改动请走 Pull Request，`CI success` 通过后才能合并。
+
 ## 数据与隐私
 
 - 默认只读取 `CODEX_HOME`（默认 `~/.codex`），只保存统计元数据。

@@ -13,6 +13,7 @@ frontend/*.tsbuildinfo
 # Keep product specifications and internal documentation local for now.
 *.md
 !README.md
+!CONTRIBUTING.md
 /docs/
 /legacy-docs/
 /screenshots/
