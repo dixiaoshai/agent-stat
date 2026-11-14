@@ -567,7 +567,7 @@ class ArchiveOnlyModeTests(unittest.TestCase):
     def test_capabilities_reports_archive_only(self):
         status, body = self.request('/api/capabilities')
         self.assertEqual(status, 200)
-        self.assertIn('no Codex or pi source access', json.loads(body)['mode'])
+        self.assertIn('no Codex, pi or dsh source access', json.loads(body)['mode'])
 
 
 class CliTests(FollowTests):

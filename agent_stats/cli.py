@@ -20,7 +20,7 @@ def default_db():
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="agent-stats", description="Agent Stats · 本机 agent 用量看板（Codex / pi）")
+    parser = argparse.ArgumentParser(prog="agent-stats", description="Agent Stats · 本机 agent 用量看板（Codex / pi / dsh）")
     parser.add_argument("--db", default=None, help="SQLite 路径（也可放在 follow 子命令之后）")
     commands = parser.add_subparsers(dest="command", required=True)
     for command in ("import", "serve"):

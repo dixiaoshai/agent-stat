@@ -365,8 +365,8 @@ def summarize_events(events, meta, warnings=None, instance='local', runtime='cod
         t['tools'].sort(key=lambda x: x['line'])
     if warnings:
         warnings = list(dict.fromkeys(warnings))
-    if runtime == 'pi':
-        # Pi usage is recorded per request; the adapter only synthesizes a
+    if runtime in ('pi', 'dsh'):
+        # Pi and dsh usage is recorded per request; the adapters synthesize a
         # cumulative snapshot for consumers that need deltas.
         usage_accounting = 'per_session' if not fork_time_uncertain else 'unknown'
     else:
