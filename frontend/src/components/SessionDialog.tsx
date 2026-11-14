@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { getSession } from '../lib/api';
 import type { Filters, Selection, SessionDetail, Turn } from '../types';
+import { ContentTimeline } from './ContentTimeline';
 import {
   attributionLabel,
   cacheRate,
@@ -119,6 +120,13 @@ export function SessionDialog({
               {warning}
             </p>
           ))}
+          {(!selection?.turnId || selectedTurn?.native_id) && (
+            <ContentTimeline
+              key={`${detail.session.id}:${selection?.turnId || ''}`}
+              sessionId={detail.session.id}
+              turnId={selectedTurn?.native_id || undefined}
+            />
+          )}
           {!selection?.turnId && (
             <section className="session-cache" aria-label="会话缓存统计">
               <h3>会话缓存输入 · 当前筛选范围</h3>

@@ -1,4 +1,11 @@
-import type { Capabilities, Filters, ImportReport, Overview, SessionDetail } from '../types';
+import type {
+  Capabilities,
+  Filters,
+  ImportReport,
+  Overview,
+  SessionContent,
+  SessionDetail,
+} from '../types';
 
 function query(filters: Filters, extra: Record<string, string> = {}): string {
   const params = new URLSearchParams();
@@ -31,6 +38,29 @@ export const getOverview = (filters: Filters, signal?: AbortSignal) =>
 
 export const getSession = (id: string, filters: Filters, signal?: AbortSignal) =>
   request<SessionDetail>(`/api/session?${query(filters, { id })}`, { signal });
+
+export const getSessionContent = (
+  id: string,
+  turnId?: string,
+  after = 0,
+  signal?: AbortSignal,
+  snapshot?: { archive_id: string; revision: string },
+) =>
+  request<SessionContent>(
+    `/api/session-content?${query({}, { id, after: String(after), ...(turnId ? { turn_id: turnId } : {}), ...snapshot })}`,
+    { signal },
+  );
+
+export const getContentBlob = (
+  id: string,
+  eventId: string,
+  pointer: string,
+  signal?: AbortSignal,
+) =>
+  request<{ text: string }>(
+    `/api/session-content/blob?${query({}, { id, event_id: eventId, pointer })}`,
+    { signal },
+  );
 
 export const getCapabilities = (signal?: AbortSignal) =>
   request<Capabilities>('/api/capabilities', { signal });

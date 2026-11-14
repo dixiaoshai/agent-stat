@@ -7,6 +7,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from .content import ContentError, ContentReader
+
 
 CAPABILITIES = {
     "source": "codex+pi", "adapter_version": "1", "mode": "local rollout JSONL / agent-trace metadata / manual refresh",
@@ -29,10 +31,14 @@ CAPABILITIES = {
 }
 
 
-def make_server(store, paths, port=8765, instance="local", archive_only=False):
+def make_server(store, paths, port=8765, instance="local", archive_only=False, content_reader=None):
     lock = threading.RLock()
     static = Path(__file__).parent / "static"
     capabilities = dict(CAPABILITIES)
+    content_reader = content_reader or ContentReader(None)
+    capabilities['items'] = list(CAPABILITIES['items']) + [
+        {'name': '执行正文', 'status': '按需读取 Trace content 归档',
+         'detail': '任务详情展示已脱敏的请求、回复、推理摘要和工具输入输出；正文不写入统计库，不依赖 Knowledge。未覆盖的任务明确提示。'}]
     if archive_only:
         capabilities["mode"] = "agent-trace metadata archive / no Codex or pi source access"
     # Archive-only refresh reports the already-received projection without
@@ -87,6 +93,19 @@ def make_server(store, paths, port=8765, instance="local", archive_only=False):
                         result = store.detail(params.get("id", ""), params)
                         if result is None:
                             return self.respond(404, {"error": "会话不存在"})
+                    elif url.path in ('/api/session-content', '/api/session-content/blob'):
+                        identity = params.get('id', '')
+                        detail = store.detail(identity)
+                        if detail is None:
+                            return self.respond(404, {'error': '会话不存在'})
+                        turn_id = params.get('turn_id')
+                        if turn_id and not any(turn.get('native_id') == turn_id for turn in detail['turns']):
+                            return self.respond(404, {'error': '轮次不存在'})
+                        if url.path.endswith('/blob'):
+                            result = content_reader.blob(identity, params.get('event_id', ''), params.get('pointer', ''))
+                        else:
+                            result = content_reader.page(identity, turn_id, params.get('after', 0), params.get('limit', 50),
+                                                         params.get('archive_id'), params.get('revision'))
                     elif url.path == "/api/capabilities":
                         result = capabilities
                     elif url.path in ("/", "/index.html") or re.fullmatch(r"/assets/[A-Za-z0-9_-]+\.(?:js|css)", url.path):
@@ -98,6 +117,8 @@ def make_server(store, paths, port=8765, instance="local", archive_only=False):
                     else:
                         return self.respond(404, {"error": "接口不存在"})
                 self.respond(200, result)
+            except ContentError as exc:
+                self.respond(exc.status, {'error': str(exc)})
             except (ValueError, TypeError) as exc:
                 self.respond(400, {"error": str(exc)})
             except Exception:

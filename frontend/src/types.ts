@@ -180,4 +180,30 @@ export interface Selection {
   sessionId: string;
   turnId?: string;
 }
+export interface ContentReference {
+  path: string;
+  bytes: number;
+  sha256: string;
+  media_type: string;
+}
+export interface ContentEvent {
+  event_id: string;
+  seq: number;
+  kind: string;
+  occurred_at: string | null;
+  turn_id: string | null;
+  attribution: string;
+  source: { path: string; line: number; series?: string } | null;
+  data: Record<string, unknown>;
+  body: Record<string, unknown> | null;
+}
+export interface SessionContent {
+  status: 'available' | 'not_configured' | 'unavailable' | 'empty';
+  message: string | null;
+  archive_id: string | null;
+  revision?: string | null;
+  events: ContentEvent[];
+  next_cursor: number;
+  has_more: boolean;
+}
 export type Page = 'overview' | 'sessions' | 'source';
