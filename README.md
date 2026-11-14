@@ -4,7 +4,7 @@
 
 pi 通过 agent-trace 的 pi adapter 接入：会话、轮次、工具和 Token 来自 pi 的 session JSONL，费用优先使用 pi 在请求时记录的 `usage.cost.total`（provider 实报或模型费率），不再按当前价格表重算；没有记录成本的来源（如 Codex）继续按 API 标准价估算，看板会区分两种口径。
 
-所有数据都留在本机：服务只监听 `127.0.0.1`，只保存统计元数据，不保存提示词、命令、思考过程或工具输出正文。缺失的信息保持「未知」，不做近似估算。
+所有数据都留在本机：服务只监听 `127.0.0.1`，统计库只保存元数据。任务详情可按需只读 Agent Trace 已脱敏的正文归档，正文不写入统计库。缺失的信息保持「未知」，不做近似估算。
 
 ## 特性
 
@@ -22,6 +22,18 @@ python3 -m agent_stats serve
 访问 <http://127.0.0.1:8765/>。
 
 本机当前正式部署使用 `follow` + `serve --archive-only`：看板只读已接收数据，新会话由 `follow` 从本机 agent-trace API 拉取，不再直接读取 Codex 日志。安装/重启见 [运行说明](docs/RUNNING.md) 的“macOS 登录自动启动”。
+
+### 在任务详情查看执行正文
+
+打开会话或轮次详情，点击“查看执行正文”，按时间线查看用户请求、Agent 回复、最终回答、推理摘要和工具输入输出。工具记录和摘要默认折叠；通过“加载更多”续读。“来源证据”保留事件 ID、源文件及行号；大型外置正文需点击读取，服务端校验文件范围、大小及 SHA-256。
+
+正文直接来自 Agent Trace 的独立 content 归档，不依赖 Agent Knowledge，也不读取原始 Codex/pi 日志。默认发现 `~/.local/share/agent-trace/content.json`；可通过 `AGENT_STATS_CONTENT_CONFIG` 或 `serve --content-config PATH` 指定 Trace content 配置，使用 `serve --no-content` 关闭。没有配置、会话未采集或归档不可用时显示明确提示，已有统计仍可使用。
+
+```sh
+python3 -m agent_stats serve --archive-only --content-config /absolute/path/to/agent-trace/content.json
+```
+
+会话详情展示整个会话的正文，不随统计日期/模型筛选裁剪；轮次详情只展示对应轮次。推理摘要是源日志中的模型摘要，不能当作完整内部思考；工具返回也不等于执行成功。正文按普通文本展示，不执行其中的 HTML、脚本或命令。
 
 默认数据库为 `~/.local/share/agent-stats/stats.sqlite3`；受限环境可加全局参数 `--db .agent-stats/stats.sqlite3`。
 

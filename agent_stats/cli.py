@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .core import Store
 from .server import make_server
+from .content import ContentReader, default_content_config
 
 
 def default_sources():
@@ -30,6 +31,9 @@ def main(argv=None):
             sub.add_argument("--port", type=int, default=8765)
             sub.add_argument("--archive-only", "--no-import", dest="archive_only", action="store_true",
                              help="只消费已接收的归档数据：启动和页面刷新都不读取 Codex 源日志")
+            content = sub.add_mutually_exclusive_group()
+            content.add_argument('--content-config', help='任务详情只读的 Agent Trace content 配置；默认发现本机 content.json')
+            content.add_argument('--no-content', action='store_true', help='关闭任务详情的正文读取')
     summary = commands.add_parser("summary")
     for key in ("start", "end", "project", "model", "source"):
         summary.add_argument("--" + key)
@@ -67,7 +71,9 @@ def main(argv=None):
             # source refresh. The dashboard only reads already-received data.
             if not args.archive_only:
                 print(json.dumps(store.import_paths(paths, instance=args.instance), ensure_ascii=False))
-            server = make_server(store, paths, args.port, args.instance, archive_only=args.archive_only)
+            content_path = None if args.no_content else args.content_config or default_content_config()
+            server = make_server(store, paths, args.port, args.instance, archive_only=args.archive_only,
+                                 content_reader=ContentReader(content_path))
             print("Agent Stats: http://127.0.0.1:%s · Ctrl+C 停止" % server.server_port, flush=True)
             try:
                 server.serve_forever()
