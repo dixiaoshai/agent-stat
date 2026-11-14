@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "trace_url": "http://127.0.0.1:8766",
+  "token_env": "AGENT_TRACE_STATS_TOKEN",
+  "database": "./.agent-stats/stats.sqlite3",
+  "page_size": 500,
+  "idle_seconds": 15,
+  "request_timeout_seconds": 20,
+  "max_backoff_seconds": 300
+}

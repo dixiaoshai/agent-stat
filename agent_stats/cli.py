@@ -14,9 +14,13 @@ def default_sources():
     return [str(home / "sessions"), str(home / "archived_sessions")]
 
 
+def default_db():
+    return os.environ.get("AGENT_STATS_DB", str(Path.home() / ".local/share/agent-stats/stats.sqlite3"))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="agent-stats", description="Agent Stats · Codex 本机用量看板")
-    parser.add_argument("--db", default=os.environ.get("AGENT_STATS_DB", str(Path.home() / ".local/share/agent-stats/stats.sqlite3")), help="SQLite 路径")
+    parser.add_argument("--db", default=None, help="SQLite 路径（也可放在 follow 子命令之后）")
     commands = parser.add_subparsers(dest="command", required=True)
     for command in ("import", "serve"):
         sub = commands.add_parser(command)
@@ -24,12 +28,16 @@ def main(argv=None):
         sub.add_argument("--instance", default="local", help="来源实例命名空间；不同设备使用不同值")
         if command == "serve":
             sub.add_argument("--port", type=int, default=8765)
-            sub.add_argument("--no-import", action="store_true", help="启动时只读已采集数据库")
+            sub.add_argument("--archive-only", "--no-import", dest="archive_only", action="store_true",
+                             help="只消费已接收的归档数据：启动和页面刷新都不读取 Codex 源日志")
     summary = commands.add_parser("summary")
     for key in ("start", "end", "project", "model", "source"):
         summary.add_argument("--" + key)
     archive = commands.add_parser("import-archive", help="消费共享归档的 metadata JSON 批次，不读取原始日志")
     archive.add_argument("--input", required=True, help="agent-trace export --view metadata 的输出文件")
+    follow = commands.add_parser("follow", help="跟随 agent-trace 本机 API 自动拉取 metadata")
+    follow.add_argument("--config", required=True, help="agent-stats.follow.json 路径")
+    follow.add_argument("--db", dest="follow_db", default=None, help="显式覆盖配置中的目标数据库")
     demo = commands.add_parser("demo", help="向指定目录生成纯合成 Codex 事件")
     demo.add_argument("--output", default=".agent-stats/demo")
     args = parser.parse_args(argv)
@@ -37,8 +45,11 @@ def main(argv=None):
         from .demo import generate
         print(json.dumps(generate(Path(args.output)), ensure_ascii=False))
         return 0
+    if args.command == "follow":
+        from .follow import run_follow
+        return run_follow(args.config, db_override=args.follow_db or args.db)
     try:
-        db = Path(args.db).expanduser()
+        db = Path(args.db or default_db()).expanduser()
         db.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         store = Store(db)
         if args.command == "summary":
@@ -52,9 +63,11 @@ def main(argv=None):
             print(json.dumps(store.import_paths(args.source or default_sources(), instance=args.instance), ensure_ascii=False, indent=2))
         else:
             paths = args.source or default_sources()
-            if not args.no_import:
+            # Archive-only mode never opens Codex logs: no startup import and no
+            # source refresh. The dashboard only reads already-received data.
+            if not args.archive_only:
                 print(json.dumps(store.import_paths(paths, instance=args.instance), ensure_ascii=False))
-            server = make_server(store, paths, args.port, args.instance)
+            server = make_server(store, paths, args.port, args.instance, archive_only=args.archive_only)
             print("Agent Stats: http://127.0.0.1:%s · Ctrl+C 停止" % server.server_port, flush=True)
             try:
                 server.serve_forever()
