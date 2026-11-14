@@ -171,3 +171,24 @@ class ArchiveTests(unittest.TestCase):
     def test_missing_title_stays_unknown(self):
         import_batch(self.store, page(0, 7, self.rows))
         self.assertIsNone(self.store.query()['sessions'][0]['title'])
+
+
+    def test_folded_source_series_is_part_of_the_identifier(self):
+        start = record(1, 'session.started', {'cwd': '/demo', 'created_at': '2026-01-01T10:00:00Z'})
+        folded = record(2, 'turn.started', {'turn_id': 'turn'})
+        folded['source']['series'] = 'child-identity'
+        native = json.dumps(['codex', 'local', 'synthetic', 'child-identity', 2],
+                            ensure_ascii=False, separators=(',', ':'))
+        folded['event_id'] = hashlib.sha256(native.encode('utf-8')).hexdigest()
+        import_batch(self.store, page(0, 2, [start, folded]))
+        self.assertEqual(self.store.db.execute('SELECT cursor FROM archive_cursors').fetchone()[0], 2)
+
+        bad = record(3, 'turn.started', {'turn_id': 'turn'})
+        bad['source']['series'] = 'synthetic'
+        with self.assertRaises(ValueError):
+            import_batch(self.store, page(2, 3, [bad]))
+        empty = record(3, 'turn.started', {'turn_id': 'turn'})
+        empty['source']['series'] = ''
+        with self.assertRaises(ValueError):
+            import_batch(self.store, page(2, 3, [empty]))
+        self.assertEqual(self.store.db.execute('SELECT cursor FROM archive_cursors').fetchone()[0], 2)

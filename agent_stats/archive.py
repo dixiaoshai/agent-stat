@@ -54,13 +54,22 @@ def _validate_event(event, after, end):
     if event['kind'] == 'session.deleted':
         if source is not None or event['data'] != {}:
             raise ValueError('deletion source must be null and metadata must be empty')
-    elif (not isinstance(source, dict) or set(source) != {'path', 'line', 'record_hash'}
+    elif (not isinstance(source, dict) or set(source) - {'series'} != {'path', 'line', 'record_hash'}
           or not isinstance(source['path'], str) or not _integer(source['line']) or source['line'] < 1
           or not _id(source['record_hash'])):
         raise ValueError('invalid source reference')
+    # Rollouts folded into a shared session carry their own first identity so
+    # two files do not collide on (session, line). The field is optional and is
+    # part of the identifier only when present.
+    series = source.get('series') if isinstance(source, dict) and event['kind'] != 'session.deleted' else None
+    if series is not None and (not isinstance(series, str) or not series or len(series) > 1000
+                               or series == event['session_id']):
+        raise ValueError('invalid source series')
     if event['runtime'] == 'codex':
-        native_identity = [event['runtime'], event['instance_id'], event['session_id'],
-                           'deleted' if event['kind'] == 'session.deleted' else source['line']]
+        native_identity = [event['runtime'], event['instance_id'], event['session_id']]
+        if series is not None:
+            native_identity.append(series)
+        native_identity.append('deleted' if event['kind'] == 'session.deleted' else source['line'])
         native_json = json.dumps(native_identity, ensure_ascii=False, separators=(',', ':'))
         if hashlib.sha256(native_json.encode('utf-8')).hexdigest() != event['event_id']:
             raise ValueError('invalid Codex event ID')
