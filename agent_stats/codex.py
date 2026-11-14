@@ -106,6 +106,12 @@ def parse_rollout(path, instance='local'):
                 events.append((stamp, number, row.get('type'), clean))
             except (ValueError, TypeError, UnicodeError):
                 warnings.append('损坏或无效的 JSONL 行: %d' % number)
+    return summarize_events(events, meta, warnings, instance)
+
+
+def summarize_events(events, meta, warnings=None, instance='local'):
+    """Aggregate sanitized observations without reading or retaining source bodies."""
+    warnings = list(warnings or [])
     sid = meta.get('id') or meta.get('session_id')
     if not isinstance(sid, str) or not sid:
         return None, warnings + ['缺少稳定 session_meta 身份']

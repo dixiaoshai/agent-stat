@@ -15,7 +15,7 @@ def default_sources():
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Agent Stats · Codex 本机用量看板")
+    parser = argparse.ArgumentParser(prog="agent-stats", description="Agent Stats · Codex 本机用量看板")
     parser.add_argument("--db", default=os.environ.get("AGENT_STATS_DB", str(Path.home() / ".local/share/agent-stats/stats.sqlite3")), help="SQLite 路径")
     commands = parser.add_subparsers(dest="command", required=True)
     for command in ("import", "serve"):
@@ -28,6 +28,8 @@ def main(argv=None):
     summary = commands.add_parser("summary")
     for key in ("start", "end", "project", "model", "source"):
         summary.add_argument("--" + key)
+    archive = commands.add_parser("import-archive", help="消费共享归档的 metadata JSON 批次，不读取原始日志")
+    archive.add_argument("--input", required=True, help="agent-trace export --view metadata 的输出文件")
     demo = commands.add_parser("demo", help="向指定目录生成纯合成 Codex 事件")
     demo.add_argument("--output", default=".agent-stats/demo")
     args = parser.parse_args(argv)
@@ -41,6 +43,11 @@ def main(argv=None):
         store = Store(db)
         if args.command == "summary":
             print(json.dumps(store.query({k: getattr(args, k) for k in ("start", "end", "project", "model", "source") if getattr(args, k)}), ensure_ascii=False, indent=2))
+        elif args.command == "import-archive":
+            from .archive import import_batch
+            with open(args.input, encoding="utf-8") as stream:
+                batch = json.load(stream)
+            print(json.dumps(import_batch(store, batch), ensure_ascii=False))
         elif args.command == "import":
             print(json.dumps(store.import_paths(args.source or default_sources(), instance=args.instance), ensure_ascii=False, indent=2))
         else:

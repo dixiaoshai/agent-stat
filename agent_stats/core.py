@@ -126,6 +126,12 @@ class Store:
                 data['title'] = titles_by_home[metadata_home(path)].get(native_id)
                 data['project_name'] = project_name(native_id, data.get('project'), projects_by_home[metadata_home(path)])
                 key = json.dumps(['codex', instance, native_id], ensure_ascii=False, separators=(',', ':'))
+                # Once a shared archive owns a session, direct refresh must not
+                # overwrite its projection or resurrect an erased session.
+                archive_table = self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='archive_sessions'").fetchone()
+                if archive_table and self.db.execute('SELECT 1 FROM archive_sessions WHERE session_key=?', (key,)).fetchone():
+                    skipped += 1
+                    continue
                 data['native_id'], data['id'] = native_id, key
                 data['parent_id'] = json.dumps(['codex', instance, data['parent_id']], ensure_ascii=False, separators=(',', ':')) if data.get('parent_id') else None
                 data['forked_from_id'] = json.dumps(['codex', instance, data['forked_from_id']], ensure_ascii=False, separators=(',', ':')) if data.get('forked_from_id') else None
