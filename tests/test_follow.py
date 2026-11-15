@@ -40,21 +40,21 @@ def record(seq, kind, data=None, sid='synthetic', project='demo'):
             'data': data or {}, 'body': None, 'raw': None}
 
 
-def session_events(start_seq, sid, total_tokens=120):
+def session_events(start_seq, sid, total_tokens=120, project='demo'):
     return [
-        record(start_seq, 'session.started', {'cwd': '/demo', 'created_at': '2026-01-01T10:00:00Z'}, sid),
-        record(start_seq + 1, 'turn.started', {'turn_id': 'turn'}, sid),
-        record(start_seq + 2, 'turn.context', {'turn_id': 'turn', 'model': 'demo'}, sid),
+        record(start_seq, 'session.started', {'cwd': '/demo', 'created_at': '2026-01-01T10:00:00Z'}, sid, project),
+        record(start_seq + 1, 'turn.started', {'turn_id': 'turn'}, sid, project),
+        record(start_seq + 2, 'turn.context', {'turn_id': 'turn', 'model': 'demo'}, sid, project),
         record(start_seq + 3, 'usage.snapshot', {
             'turn_id': 'turn',
             'cumulative': {'input_tokens': total_tokens - 20, 'output_tokens': 20, 'total_tokens': total_tokens},
             'last_usage': {'input_tokens': total_tokens - 20, 'output_tokens': 20, 'total_tokens': total_tokens},
-        }, sid),
+        }, sid, project),
         record(start_seq + 4, 'tool.called', {'turn_id': 'turn', 'call_id': 'call', 'name': 'shell',
-                                             'input_bytes': 50}, sid),
+                                             'input_bytes': 50}, sid, project),
         record(start_seq + 5, 'tool.returned', {'turn_id': 'turn', 'call_id': 'call',
-                                               'output_bytes': 12, 'status': 'result_observed'}, sid),
-        record(start_seq + 6, 'turn.completed', {'turn_id': 'turn'}, sid),
+                                               'output_bytes': 12, 'status': 'result_observed'}, sid, project),
+        record(start_seq + 6, 'turn.completed', {'turn_id': 'turn'}, sid, project),
     ]
 
 
@@ -294,6 +294,12 @@ class ConfigTests(FollowTests):
             'idle zero': {**valid, 'idle_seconds': 0},
             'backoff below idle': {**valid, 'idle_seconds': 30, 'max_backoff_seconds': 10},
             'timeout too big': {**valid, 'request_timeout_seconds': 121},
+            'scope not a list': {**valid, 'allowed_project_ids': 'demo'},
+            'scope empty': {**valid, 'allowed_project_ids': []},
+            'scope null': {**valid, 'allowed_project_ids': None},
+            'scope blank id': {**valid, 'allowed_project_ids': ['']},
+            'scope padded id': {**valid, 'allowed_project_ids': [' demo']},
+            'scope non-string id': {**valid, 'allowed_project_ids': ['demo', 1]},
         }
         for label, payload in cases.items():
             path = self.root / 'bad-follow.json'
@@ -303,6 +309,38 @@ class ConfigTests(FollowTests):
                     load_config(path)
                 self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
                 self.assertEqual(caught.exception.klass, 'permanent')
+
+    def test_allowed_project_ids_is_optional_and_deduped(self):
+        trace = self.trace()
+        self.assertEqual(self.config(trace).allowed_project_ids, ())
+        config = self.config(trace, allowed_project_ids=['demo', 'demo', 'pi'])
+        self.assertEqual(config.allowed_project_ids, ('demo', 'pi'))
+
+    def test_config_check_reports_project_scope_without_side_effects(self):
+        trace = self.trace()
+        config = self.config(trace, allowed_project_ids=['demo', 'demo'])
+        base = [sys.executable, '-m', 'agent_stats', 'config-check', '--config', str(config.path)]
+        root = str(Path(__file__).resolve().parent.parent)
+        result = subprocess.run(base, capture_output=True, text=True, cwd=root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload['allowed_project_ids'], ['demo'])
+        self.assertEqual(payload['view'], 'metadata')
+        self.assertEqual(payload['database'], str(config.database))
+        self.assertFalse(config.database.exists())
+
+        # Omitted scope means "consume everything" and is reported as null.
+        self.config(trace)
+        result = subprocess.run(base, capture_output=True, text=True, cwd=root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIsNone(json.loads(result.stdout)['allowed_project_ids'])
+
+        path = self.root / 'invalid-follow.json'
+        path.write_text(json.dumps({'schema_version': 1, 'allowed_project_ids': ['demo']}), encoding='utf-8')
+        result = subprocess.run([sys.executable, '-m', 'agent_stats', 'config-check', '--config', str(path)],
+                                capture_output=True, text=True, cwd=root)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(json.loads(result.stderr.strip().splitlines()[-1])['error']['code'], 'INVALID_CONFIG')
 
     def test_token_comes_from_environment_only(self):
         trace = self.trace()
@@ -357,6 +395,21 @@ class WorkerTests(FollowTests):
         self.stop_worker(restarted, thread2)
         self.assertEqual(trace.requests[seen][0], 7)
         self.assertEqual(store2.query()['summary']['sessions'], 2)
+
+    def test_follow_consumes_only_configured_projects(self):
+        trace = self.trace(session_events(1, 'synthetic') + session_events(8, 'outside', project='other'))
+        config = self.config(trace, allowed_project_ids=['demo'])
+        worker, store, lines = self.worker(config)
+        thread = self.start(worker)
+        self.assertTrue(wait_until(lambda: self.cursor(config) == 14), lines)
+        self.stop_worker(worker, thread)
+        summary = store.query()['summary']
+        self.assertEqual((summary['sessions'], summary['token_total'], summary['tool_calls']), (1, 120, 1))
+        self.assertEqual(store.db.execute('SELECT project_id FROM archive_sessions').fetchall(), [('demo',)])
+        self.assertEqual(store.db.execute('SELECT COUNT(*) FROM archive_events').fetchone()[0], 7)
+        self.assertFalse([line for line in lines if line['type'] == 'follow.error'])
+        # The skipped project is not an error and the cursor still reached the end.
+        self.assertEqual([line['reason'] for line in lines if line['type'] == 'follow.stopped'], ['signal'])
 
     def test_second_instance_is_locked_out(self):
         trace = self.trace(session_events(1, 'synthetic'))

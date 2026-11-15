@@ -42,12 +42,25 @@ def main(argv=None):
     follow = commands.add_parser("follow", help="跟随 agent-trace 本机 API 自动拉取 metadata")
     follow.add_argument("--config", required=True, help="agent-stats.follow.json 路径")
     follow.add_argument("--db", dest="follow_db", default=None, help="显式覆盖配置中的目标数据库")
+    check = commands.add_parser("config-check", help="只校验 follow 配置：不建库、不联网、不回显 token")
+    check.add_argument("--config", required=True, help="agent-stats.follow.json 路径")
+    check.add_argument("--db", dest="follow_db", default=None, help="显式覆盖配置中的目标数据库")
     demo = commands.add_parser("demo", help="向指定目录生成纯合成 Codex 事件")
     demo.add_argument("--output", default=".agent-stats/demo")
     args = parser.parse_args(argv)
     if args.command == "demo":
         from .demo import generate
         print(json.dumps(generate(Path(args.output)), ensure_ascii=False))
+        return 0
+    if args.command == "config-check":
+        from .follow import FollowError, describe_config
+        try:
+            projection = describe_config(args.config, db_override=args.follow_db or args.db)
+        except FollowError as exc:
+            print(json.dumps({"error": {"code": exc.code, "class": exc.klass, "message": exc.message}},
+                             ensure_ascii=False), file=sys.stderr)
+            return 1
+        print(json.dumps(projection, ensure_ascii=False, indent=2))
         return 0
     if args.command == "follow":
         from .follow import run_follow

@@ -40,6 +40,22 @@ def _integer(value):
     return type(value) is int and 0 <= value <= 9007199254740991
 
 
+def _project_scope(allowed_project_ids):
+    """Normalize the optional consumption scope; ``None`` means the full archive."""
+    if allowed_project_ids is None:
+        return None
+    if isinstance(allowed_project_ids, str) or not isinstance(allowed_project_ids, (list, tuple, set, frozenset)):
+        raise ValueError('allowed_project_ids must be a collection of project ids')
+    scope = set()
+    for project_id in allowed_project_ids:
+        if not isinstance(project_id, str) or not project_id:
+            raise ValueError('allowed_project_ids must contain non-empty project ids')
+        scope.add(project_id)
+    if not scope:
+        raise ValueError('allowed_project_ids must not be empty')
+    return scope
+
+
 def _validate_event(event, after, end):
     if not isinstance(event, dict) or set(event) != _ENVELOPE or event['schema_version'] != 1:
         raise ValueError('invalid archive event envelope')
@@ -193,8 +209,17 @@ def _rebuild(db, archive_id, session_key):
     db.execute('INSERT OR REPLACE INTO sessions VALUES(?,?,?)', (session_key, 0, json.dumps(result, ensure_ascii=False)))
 
 
-def import_batch(store, batch):
-    """Apply exactly one metadata page and cursor in one transaction."""
+def import_batch(store, batch, allowed_project_ids=None):
+    """Apply exactly one metadata page and cursor in one transaction.
+
+    ``allowed_project_ids`` narrows consumption to the project ids in that
+    collection; ``None`` (the default) consumes the whole archive. Every event
+    is still validated as part of the page, but events outside the scope are
+    skipped inside the transaction: they write no ``archive_events``, create no
+    ``archive_sessions`` row and their deletions are skipped, while the cursor
+    advances as usual. The page fingerprint is computed over the complete batch,
+    so replaying a filtered page stays idempotent.
+    """
     keys = {'schema_version', 'archive_id', 'view', 'after_cursor', 'next_cursor', 'has_more', 'events'}
     if (not isinstance(batch, dict) or set(batch) != keys or batch['schema_version'] != 1
             or batch['view'] != 'metadata' or not isinstance(batch['archive_id'], str) or not batch['archive_id']
@@ -213,6 +238,7 @@ def import_batch(store, batch):
         previous = event['archive_seq']
     if batch['has_more'] and end == after:
         raise ValueError('non-advancing page')
+    scope = _project_scope(allowed_project_ids)
     fingerprint = _digest(batch)
     db = store.db
     db.execute('BEGIN IMMEDIATE')
@@ -231,8 +257,15 @@ def import_batch(store, batch):
                 return {'archive_id': archive_id, 'cursor': cursor, 'imported': 0, 'replayed': True}
             raise ValueError('archive cursor gap, overlapping page or conflicting replay')
         affected = set()
+        imported = 0
         for event in batch['events']:
             key = event['session_key']
+            if scope is not None and event['project_id'] not in scope:
+                # Out-of-scope data belongs to another consumer's scope; skipping it
+                # is not an error and must not block the cursor. The event was
+                # validated above, so a malformed page still fails atomically.
+                continue
+            imported += 1
             owner = db.execute('SELECT archive_id,project_id FROM archive_sessions WHERE session_key=?', (key,)).fetchone()
             if owner and owner != (archive_id, event['project_id']):
                 raise ValueError('session already belongs to another archive or project')
@@ -258,7 +291,7 @@ def import_batch(store, batch):
         db.execute('INSERT OR REPLACE INTO archive_cursors VALUES(?,?)', (archive_id, end))
         db.execute('INSERT OR REPLACE INTO archive_pages VALUES(?,?,?,?)', (archive_id, after, end, fingerprint))
         db.commit()
-        return {'archive_id': archive_id, 'cursor': end, 'imported': len(batch['events']), 'replayed': False}
+        return {'archive_id': archive_id, 'cursor': end, 'imported': imported, 'replayed': False}
     except Exception:
         db.rollback()
         raise

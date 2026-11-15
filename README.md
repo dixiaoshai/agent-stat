@@ -33,7 +33,7 @@ python3 -m agent_stats serve
 python3 -m agent_stats serve --archive-only --content-config /absolute/path/to/agent-trace/content.json
 ```
 
-会话详情展示整个会话的正文，不随统计日期/模型筛选裁剪；轮次详情只展示对应轮次。推理摘要是源日志中的模型摘要，不能当作完整内部思考；工具返回也不等于执行成功。正文按普通文本展示，不执行其中的 HTML、脚本或命令。
+会话详情展示整个会话的正文，不随统计日期/模型筛选裁剪；轮次详情只展示对应轮次。推理摘要是源日志中的模型摘要，不能当作完整内部思考；工具返回也不等于执行成功。正文按普通文本展示，不执行其中的 HTML、脚本或命令。正文范围只由 Trace content 配置的项目集合决定，与 `follow` 的 `allowed_project_ids` 消费范围相互独立。
 
 默认数据库为 `~/.local/share/agent-stats/stats.sqlite3`；受限环境可加全局参数 `--db .agent-stats/stats.sqlite3`。
 
@@ -70,8 +70,27 @@ agent-stats serve
 
 ```sh
 export AGENT_TRACE_STATS_TOKEN=...      # 明文 token 只从环境变量读取，不写入配置或日志
+python3 -m agent_stats config-check --config agent-stats.follow.example.json   # 只校验配置：不建库、不联网
 python3 -m agent_stats follow --config agent-stats.follow.example.json
 python3 -m agent_stats --db .agent-stats/stats.sqlite3 serve --archive-only
+```
+
+可选字段 `allowed_project_ids`（字符串数组）把消费范围收窄到名单内的项目：
+
+- 省略该字段 = 消费全部项目（默认，保持既有行为）；写入后只消费名单内项目的事件。
+- 名单外事件在事务内跳过：不写统计投影，也不视为错误；游标照常前进，重放同一页仍幂等。
+- 项目 ID 精确匹配，数组会去重；空数组、空字符串、首尾带空白或非字符串的值都会拒绝启动。
+- 缩小范围不会清理已导入的历史数据，也不会让整个页面失败。
+- 任务详情的正文范围由 Trace content 配置的项目集合决定，与 follow 的消费范围相互独立。
+
+```json
+{
+  "schema_version": 1,
+  "trace_url": "http://127.0.0.1:8766",
+  "token_env": "AGENT_TRACE_STATS_TOKEN",
+  "database": "./.agent-stats/stats.sqlite3",
+  "allowed_project_ids": ["agent-stats"]
+}
 ```
 
 stdout 逐行输出 `follow.started` / `follow.page` / `follow.idle` / `follow.error` / `follow.state` / `follow.stopped`（NDJSON，不含 token、正文或原始事件）。`Ctrl+C` / SIGTERM 优雅停止并释放租约，退出码 `0`；配置 / 启动 / 租约失败 `1`；启动后遇到永久错误 `2`。

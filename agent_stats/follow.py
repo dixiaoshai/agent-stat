@@ -41,7 +41,8 @@ MAX_RESPONSE_BYTES = 40 * 1024 * 1024
 LEASE_SECONDS = 30
 LEASE_CHUNK_SECONDS = 10
 CONFIG_KEYS = {'schema_version', 'trace_url', 'token_env', 'database', 'page_size',
-               'idle_seconds', 'request_timeout_seconds', 'max_backoff_seconds'}
+               'idle_seconds', 'request_timeout_seconds', 'max_backoff_seconds',
+               'allowed_project_ids'}
 
 _STATE_DDL = """
 CREATE TABLE IF NOT EXISTS follow_state (
@@ -91,10 +92,27 @@ class FollowConfig:
     idle_seconds: int = DEFAULT_IDLE_SECONDS
     request_timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
     max_backoff_seconds: int = DEFAULT_MAX_BACKOFF_SECONDS
+    # Optional consumption scope; an empty tuple consumes every project.
+    allowed_project_ids: tuple = ()
 
 
 def _invalid(field, message):
     raise FollowError('INVALID_CONFIG', 'permanent', 'config.%s: %s' % (field, message))
+
+
+def _project_ids(raw, field='allowed_project_ids'):
+    """Validate an optional project whitelist: array of non-empty ids, deduped."""
+    if not isinstance(raw, list):
+        _invalid(field, 'must be an array of project ids')
+    if not raw:
+        _invalid(field, 'must contain at least one project id')
+    unique = []
+    for value in raw:
+        if not isinstance(value, str) or not value.strip() or value != value.strip():
+            _invalid(field, 'must contain non-empty project ids')
+        if value not in unique:
+            unique.append(value)
+    return tuple(unique)
 
 
 def _bounded_int(raw, field, low, high):
@@ -157,6 +175,9 @@ def load_config(path, db_override=None):
         _invalid('database', 'must be a non-empty string')
     if database.startswith('~'):
         _invalid('database', 'must not use ~; use an absolute path or a path relative to the config file')
+    # Optional project scope: omitted means "consume every project" (the
+    # historical behavior); a configured list narrows consumption only.
+    allowed_project_ids = _project_ids(raw['allowed_project_ids']) if 'allowed_project_ids' in raw else ()
     idle_seconds = _bounded_int(raw.get('idle_seconds', DEFAULT_IDLE_SECONDS), 'idle_seconds', 1, 3600)
     page_size = _bounded_int(raw.get('page_size', DEFAULT_PAGE_SIZE), 'page_size', 1, 1000)
     request_timeout_seconds = _bounded_int(raw.get('request_timeout_seconds', DEFAULT_TIMEOUT_SECONDS),
@@ -173,7 +194,25 @@ def load_config(path, db_override=None):
     return FollowConfig(path=config_path, trace_url=trace_url, token_env=token_env,
                         database=target, page_size=page_size, idle_seconds=idle_seconds,
                         request_timeout_seconds=request_timeout_seconds,
-                        max_backoff_seconds=max_backoff_seconds)
+                        max_backoff_seconds=max_backoff_seconds,
+                        allowed_project_ids=allowed_project_ids)
+
+
+def describe_config(path, db_override=None):
+    """Safe projection for ``config-check``: no token value, no database I/O."""
+    config = load_config(path, db_override)
+    return {
+        'schema_version': 1,
+        'trace_url': config.trace_url,
+        'token_env': config.token_env,
+        'database': str(config.database),
+        'view': VIEW,
+        'page_size': config.page_size,
+        'idle_seconds': config.idle_seconds,
+        'request_timeout_seconds': config.request_timeout_seconds,
+        'max_backoff_seconds': config.max_backoff_seconds,
+        'allowed_project_ids': list(config.allowed_project_ids) if config.allowed_project_ids else None,
+    }
 
 
 def read_token(config):
@@ -536,7 +575,7 @@ class FollowWorker:
         page = self.client.events(self.cursor, self.config.page_size)
         validate_page(page, self.cursor, self.config.page_size, self.archive_id)
         self._touch_attempt()
-        result = import_batch(self.store, page)
+        result = import_batch(self.store, page, self.config.allowed_project_ids or None)
         self.cursor = result['cursor']
         self._record_success()
         if page['events'] or page['next_cursor'] > page['after_cursor']:

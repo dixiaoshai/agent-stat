@@ -11,12 +11,12 @@ from agent_stats.archive import import_batch
 from agent_stats.core import Store
 
 
-def record(seq, kind, data=None, sid='synthetic'):
+def record(seq, kind, data=None, sid='synthetic', project='demo'):
     key = json.dumps(['codex', 'local', sid], separators=(',', ':'))
     native = json.dumps(['codex', 'local', sid, 'deleted' if kind == 'session.deleted' else seq], ensure_ascii=False, separators=(',', ':'))
     return {'schema_version': 1, 'event_id': hashlib.sha256(native.encode('utf-8')).hexdigest(), 'archive_seq': seq,
             'runtime': 'codex', 'instance_id': 'local', 'session_id': sid, 'session_key': key,
-            'project_id': 'demo', 'kind': kind, 'occurred_at': '2026-01-01T10:00:%02dZ' % seq,
+            'project_id': project, 'kind': kind, 'occurred_at': '2026-01-01T10:00:%02dZ' % seq,
             'observed_at': '2026-01-01T10:01:00Z', 'native_type': kind,
             'source': None if kind == 'session.deleted' else {'path': '/demo/rollout.jsonl', 'line': seq, 'record_hash': format(seq + 30, '064x')},
             'data': data or {}, 'body': None, 'raw': None}
@@ -151,6 +151,59 @@ class ArchiveTests(unittest.TestCase):
             import_batch(self.store, page(3, 4, [bad]))
         import_batch(self.store, page(3, 7, self.rows[3:]))
         self.assertEqual(self.store.query()['summary']['token_total'], 120)
+
+    def test_project_scope_skips_out_of_scope_events(self):
+        usage = {'turn_id': 'turn', 'cumulative': {'input_tokens': 100, 'output_tokens': 20, 'total_tokens': 120},
+                 'last_usage': {'input_tokens': 100, 'output_tokens': 20, 'total_tokens': 120}}
+        in_scope = [
+            record(1, 'session.started', {'cwd': '/demo', 'created_at': '2026-01-01T10:00:00Z'}, 'demo-session'),
+            record(2, 'turn.started', {'turn_id': 'turn'}, 'demo-session'),
+            record(3, 'usage.snapshot', usage, 'demo-session'),
+            record(4, 'turn.completed', {'turn_id': 'turn'}, 'demo-session'),
+        ]
+        outside = [
+            record(5, 'session.started', {'cwd': '/other', 'created_at': '2026-01-01T10:00:00Z'}, 'other-session', project='other'),
+            record(6, 'turn.started', {'turn_id': 'turn'}, 'other-session', project='other'),
+            record(7, 'turn.completed', {'turn_id': 'turn'}, 'other-session', project='other'),
+        ]
+        mixed = in_scope + outside
+        result = import_batch(self.store, page(0, 7, mixed), allowed_project_ids=('demo',))
+        # The cursor advances over the whole page even though only in-scope
+        # events are stored.
+        self.assertEqual((result['cursor'], result['imported'], result['replayed']), (7, 4, False))
+        self.assertEqual(self.store.db.execute('SELECT cursor FROM archive_cursors').fetchone()[0], 7)
+        self.assertEqual(self.store.query()['summary']['sessions'], 1)
+        self.assertEqual(self.store.query()['summary']['token_total'], 120)
+        self.assertEqual(self.store.db.execute('SELECT project_id FROM archive_sessions').fetchall(), [('demo',)])
+        self.assertEqual(self.store.db.execute('SELECT COUNT(*) FROM archive_events').fetchone()[0], 4)
+
+        # Out-of-scope deletions are skipped too, without creating a tombstone.
+        deletion = record(8, 'session.deleted', sid='other-session', project='other')
+        result = import_batch(self.store, page(7, 8, [deletion]), allowed_project_ids=['demo'])
+        self.assertEqual((result['cursor'], result['imported']), (8, 0))
+        self.assertIsNone(self.store.db.execute('SELECT 1 FROM archive_deleted').fetchone())
+
+        # The fingerprint covers the complete batch, so replaying a filtered
+        # page is still idempotent and does not move the cursor backwards.
+        replay = import_batch(self.store, page(0, 7, mixed), allowed_project_ids=('demo',))
+        self.assertTrue(replay['replayed'])
+        self.assertEqual((replay['cursor'], replay['imported']), (8, 0))
+        self.assertEqual(self.store.query()['summary']['sessions'], 1)
+        self.assertEqual(self.store.db.execute('SELECT COUNT(*) FROM archive_events').fetchone()[0], 4)
+
+        # Page validation still covers every event, including out-of-scope ones.
+        bad = record(9, 'turn.started', {'turn_id': 'turn'}, 'other-session', project='other')
+        bad['body'] = {'text': 'SECRET_SENTINEL'}
+        with self.assertRaises(ValueError):
+            import_batch(self.store, page(8, 9, [bad]), allowed_project_ids=('demo',))
+        self.assertEqual(self.store.db.execute('SELECT cursor FROM archive_cursors').fetchone()[0], 8)
+        self.assertNotIn(b'SECRET_SENTINEL', (self.root / 'stats.sqlite3').read_bytes())
+        # An empty or non-string scope is a caller error, not "consume nothing".
+        for bad_scope in ('demo', [], ['demo', '']):
+            with self.subTest(scope=bad_scope):
+                with self.assertRaises(ValueError):
+                    import_batch(self.store, page(8, 9, [record(9, 'turn.started', {'turn_id': 'turn'})]),
+                                 allowed_project_ids=bad_scope)
 
 
     def test_session_title_is_kept_and_bounded(self):
